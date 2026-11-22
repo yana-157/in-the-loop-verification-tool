@@ -1,0 +1,11 @@
+{
+  "name": "in-the-loop-verification-tool",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "A static, human-in-the-loop review workspace for screenshots and scraped spreadsheet claims.",
+  "scripts": {
+    "dev": "python3 -m http.server 4173 --bind 127.0.0.1",
+    "test": "node --test tests/*.test.mjs"
+  }
+}

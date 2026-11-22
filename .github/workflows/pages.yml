@@ -1,0 +1,58 @@
+name: Deploy In The Loop to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verification-pages
+  cancel-in-progress: false
+
+jobs:
+  validate-and-upload:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Test data import and review behavior
+        run: node --test tests/*.test.mjs
+      - name: Stage deployable assets
+        shell: bash
+        env:
+          SITE_SOURCE: '.'
+          SITE_OUTPUT: ${{ runner.temp }}/in-the-loop-pages
+        run: |
+          mkdir -p "$SITE_OUTPUT/vendor" "$SITE_OUTPUT/samples"
+          cp "$SITE_SOURCE/index.html" "$SITE_SOURCE/styles.css" "$SITE_SOURCE/app.js" "$SITE_SOURCE/favicon.svg" "$SITE_SOURCE/.nojekyll" "$SITE_OUTPUT/"
+          cp -R "$SITE_SOURCE/lib" "$SITE_OUTPUT/lib"
+          cp "$SITE_SOURCE/vendor/xlsx.full.min.js" "$SITE_SOURCE/vendor/LICENSE.sheetjs.txt" "$SITE_OUTPUT/vendor/"
+          cp "$SITE_SOURCE/samples/"*.csv "$SITE_OUTPUT/samples/"
+          cp -R "$SITE_SOURCE/samples/assets" "$SITE_OUTPUT/samples/assets"
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+      - name: Upload static application
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ${{ runner.temp }}/in-the-loop-pages
+
+  deploy:
+    needs: validate-and-upload
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

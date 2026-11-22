@@ -1,0 +1,2 @@
+id,title,screenshot_path,source_url,claim,field,extracted_value
+asset-001,Example facility,data/screenshots/example.png,https://example.com/facility,The facility lists 35 beds,Bed capacity,35
