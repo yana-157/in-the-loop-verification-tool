@@ -3,11 +3,12 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import * as data from '../lib/data.js';
+import * as audit from '../lib/audit.js';
 
 // A small DOM adapter exercises the app's actual event handlers without a browser
 // dependency. Layout and XLSX uploads can also be exercised in a real browser.
 const appSource = readFileSync(new URL('../app.js', import.meta.url), 'utf8')
-  .replace(/^import[^\n]+\n/, '')
+  .replace(/^import[^\n]+\n/gm, '')
   .replaceAll('import.meta.url', "'http://localhost:4173/app.js'");
 const storageKey = 'in-the-loop:active:v1';
 
@@ -32,6 +33,7 @@ class Element {
   removeAttribute(name) { delete this.attributes[name]; }
   replaceChildren(...children) { this.options = children; }
   add(option) { this.options.push(option); }
+  focus() {}
   scrollTo() {}
   showModal() { this.open = true; }
   close() { this.open = false; }
@@ -55,22 +57,35 @@ async function harness(records = fixture(), savedStorage) {
   const ratings = ['rejected', 'inconclusive', 'accepted'].map(status => {
     const button = new Element(); button.dataset.rate = status; return button;
   });
+  for (const [input, value] of Object.entries({ floor: '90', target: '98', alpha: '5', power: '80' })) {
+    get(`#audit-${input}`).value = value;
+  }
   const storage = savedStorage || new Map([[storageKey, JSON.stringify({
     records, selectedId: records[0].id, expanded: 'pending',
     name: 'Test spreadsheet', isSample: false,
   })]]);
-  let objectUrls = 0;
+  const objectUrls = new Map();
+  const downloads = [];
   class TestURL extends URL {
-    static createObjectURL() { return `blob:test-${++objectUrls}`; }
+    static createObjectURL(blob) {
+      const url = `blob:test-${objectUrls.size + 1}`;
+      objectUrls.set(url, blob);
+      return url;
+    }
     static revokeObjectURL() {}
   }
   const context = vm.createContext({
-    ...data,
+    ...data, ...audit,
     document: {
       querySelector: selector => selector === 'dialog[open]' ? null : get(selector),
       querySelectorAll: selector => selector === '[data-rate]' ? ratings : [],
       getElementById: id => get(`#${id}`),
       addEventListener() {},
+      body: { append() {} },
+      createElement: () => ({
+        click() { downloads.push({ name: this.download, blob: objectUrls.get(this.href) }); },
+        remove() {},
+      }),
     },
     fetch: async () => ({
       ok: true,
@@ -78,6 +93,7 @@ async function harness(records = fixture(), savedStorage) {
     }),
     location: { href: 'http://localhost:4173/' },
     URL: TestURL,
+    Blob,
     Option: class { constructor(label, value) { this.label = label; this.value = value; } },
     localStorage: {
       getItem: key => storage.get(key) ?? null,
@@ -88,8 +104,9 @@ async function harness(records = fixture(), savedStorage) {
   });
   await vm.runInContext(`(async () => {\n${appSource}\n})()`, context);
   return {
-    get, storage,
+    get, storage, downloads,
     state: () => JSON.parse(storage.get(storageKey)),
+    audit: () => JSON.parse(storage.get(`${JSON.parse(storage.get(storageKey)).key}:accuracy-audit:v1`)),
     clickQueue: dataset => get('#navigators').dispatch('click', { target: { closest: () => ({ dataset }) } }),
     rate: status => ratings.find(button => button.dataset.rate === status).dispatch('click'),
   };
@@ -118,6 +135,70 @@ test('queue controls support arbitrary pages and selections with only one queue 
   app.clickQueue({ queue: 'rejected' });
   assert.equal((app.get('#navigators').innerHTML.match(/aria-expanded="true"/g) || []).length, 1);
   assert.equal(app.get('#empty-state').hidden, false);
+});
+
+test('a frozen random sample keeps its links and reviews through reloads separately from ordinary reviews', async () => {
+  const app = await harness(fixture(161));
+  app.clickQueue({ record: 'asset-17' });
+  app.rate('accepted');
+  app.get('#audit-form').dispatch('submit');
+  assert.match(app.get('#audit-preview').textContent, /39 of 161 rows.*38 rows must be confirmed correct/);
+  app.get('#audit-start').dispatch('click');
+  const firstDraw = app.audit();
+  assert.equal(firstDraw.reviews.length, 39);
+  assert.ok(firstDraw.reviews.every(review => review.status === 'pending'));
+  const [first] = firstDraw.reviews;
+  assert.equal(app.get('#asset-id').textContent, first.id);
+  assert.equal(app.get('#source-link').attributes.href, `https://example.com/source/${first.id.slice(6)}`);
+  app.rate('inconclusive');
+  app.get('#review-notes').value = 'The source no longer shows the claim.';
+  app.get('#review-notes').dispatch('input');
+
+  const restored = await harness(undefined, app.storage);
+  assert.equal(restored.state().inAudit, true);
+  assert.deepEqual(restored.audit().reviews.map(review => review.id), firstDraw.reviews.map(review => review.id));
+  assert.equal(restored.get('#review-notes').value, 'The source no longer shows the claim.');
+  assert.match(restored.get('#audit-result').textContent, /38 rows left to review/);
+  restored.get('#audit-toggle').dispatch('click');
+  assert.equal(restored.get('#asset-id').textContent, 'asset-17');
+  assert.equal(restored.get('#current-status').textContent, 'Correct');
+  assert.equal(restored.get('#review-notes').value, '');
+  assert.equal(restored.get('#total-count').textContent, 161);
+  assert.equal(restored.get('#export-label').textContent, 'Export reviews');
+  restored.get('#audit-toggle').dispatch('click');
+  assert.equal(restored.get('#total-count').textContent, 39);
+  assert.equal(restored.get('#export-label').textContent, 'Export audit receipt');
+});
+
+test('the source-link demo reports a confidence interval and exports its reviewed sample', async () => {
+  const app = await harness(undefined, new Map());
+  assert.equal(app.get('#audit-demo').hidden, false);
+  app.get('#audit-form').dispatch('submit');
+  assert.match(app.get('#audit-preview').textContent, /all 5 rows/);
+  app.get('#audit-floor').value = '50';
+  app.get('#audit-form').dispatch('input');
+  assert.equal(app.get('#audit-start').disabled, true);
+  app.get('#audit-form').dispatch('submit');
+  assert.match(app.get('#audit-preview').textContent, /3 of 5 rows/);
+  app.get('#audit-start').dispatch('click');
+  for (const { id } of app.audit().reviews) {
+    app.clickQueue({ record: id });
+    assert.match(app.get('#source-link').attributes.href, /^https:\/\//);
+    app.rate('accepted');
+  }
+  assert.match(app.get('#audit-result').textContent, /passed.*50%/);
+  assert.match(app.get('#audit-interval').textContent, /95% confidence interval.*60% to 100%/);
+  app.rate('inconclusive');
+  assert.match(app.get('#audit-result').textContent, /threshold check is inconclusive/);
+  assert.match(app.get('#audit-interval').textContent, /40% to 100%.*unclear rows/);
+  app.get('#export-button').dispatch('click');
+  const [download] = app.downloads;
+  assert.match(download.name, /-accuracy-audit\.json$/);
+  const receipt = JSON.parse(await download.blob.text());
+  assert.equal(receipt.result.status, 'inconclusive');
+  assert.equal(receipt.result.confidenceInterval.lower, 0.4);
+  assert.equal(receipt.sample.length, 3);
+  assert.ok(receipt.sample.every(row => row.sourceUrl.startsWith('https://')));
 });
 
 test('collapsing the navigator preserves previous and next asset navigation', async () => {

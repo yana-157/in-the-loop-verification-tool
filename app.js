@@ -1,4 +1,5 @@
 import { parseDelimited, normalizeRows, SOURCE_KEYS, safeSourceUrl, toCsv, paginate, datasetKey, legacyDatasetKey } from './lib/data.js';
+import { planAudit, drawAuditSample, evaluateAudit } from './lib/audit.js';
 
 const $ = selector => document.querySelector(selector);
 const paths = {
@@ -36,6 +37,9 @@ const STORAGE = 'in-the-loop:active:v1';
 let records = [], selectedId = null, expanded = 'pending', query = '';
 let replaceLegacySample = false;
 let name = 'Repository evidence', isSample = true, key = '', saveFailed = false;
+let auditPreview = null, auditRun = null, inAudit = false, allRowsView = null;
+const reviewDecision = ({ id, status, notes, reviewedAt }) => ({ id, status, notes, reviewedAt });
+const percent = rate => `${(rate * 100).toLocaleString('en-US', { maximumFractionDigits: 3 })}%`;
 const queues = Object.fromEntries(Object.keys(STATUS).map(status => [status, { page: 1, size: 10 }]));
 let pendingImport = null, workbook = null, loadedFileName = '', toastTimeout, importSequence = 0;
 
@@ -49,21 +53,44 @@ function notice(message) {
   $('#notice').textContent = message;
   $('#notice').hidden = !message;
 }
-function current() { return records.find(record => record.id === selectedId); }
+function visibleRecords() { return inAudit ? auditRun.records : records; }
+function current() { return visibleRecords().find(record => record.id === selectedId); }
 function queueRecords(status = expanded || current()?.status || 'pending') {
-  return records.filter(record => record.status === status && (!query || [record.id, record.title, record.sourceUrl, ...record.fields.map(field => field.value)].some(value => String(value).toLowerCase().includes(query))));
+  return visibleRecords().filter(record => record.status === status && (!query || [record.id, record.title, record.sourceUrl, ...record.fields.map(field => field.value)].some(value => String(value).toLowerCase().includes(query))));
 }
+function auditKey() { return `${key}:accuracy-audit:v1`; }
 function persist() {
   try {
-    localStorage.setItem(STORAGE, JSON.stringify({ records, name, isSample, key, selectedId, expanded, queues, autoAdvance: $('#auto-advance').checked }));
-    if (key) localStorage.setItem(key, JSON.stringify(records.map(({ id, status, notes, reviewedAt }) => ({ id, status, notes, reviewedAt }))));
+    if (auditRun) localStorage.setItem(auditKey(), JSON.stringify({
+      plan: auditRun.plan, startedAt: auditRun.startedAt, reviews: auditRun.records.map(reviewDecision),
+    }));
+    localStorage.setItem(STORAGE, JSON.stringify({ records, name, isSample, key, selectedId, expanded, queues, autoAdvance: $('#auto-advance').checked, inAudit, allRowsView }));
+    if (key) localStorage.setItem(key, JSON.stringify(records.map(reviewDecision)));
     saveFailed = false;
     $('#save-status').innerHTML = '<span class="local-dot"></span>Saved locally';
   } catch {
     saveFailed = true;
     $('#save-status').textContent = 'Export to save';
-    notice('Browser storage is unavailable or full. Your reviews are still here for this session. Export reviews to save a copy.');
+    notice(`Browser storage is unavailable or full. Your reviews are still here for this session. ${inAudit ? 'Export the audit receipt' : 'Export reviews'} to save a copy.`);
   }
+}
+function sampleRecords(reviews) {
+  const byId = new Map(records.map(record => [record.id, record]));
+  return reviews.map(({ id, status = 'pending', notes = '', reviewedAt = '' }) => {
+    if (!byId.has(id) || !Object.hasOwn(STATUS, status)) throw new Error('The saved sample no longer matches this sheet.');
+    return { ...byId.get(id), status, notes, reviewedAt };
+  });
+}
+function restoreAudit() {
+  auditRun = null;
+  if (!key) return;
+  try {
+    const saved = JSON.parse(localStorage.getItem(auditKey()));
+    if (!saved || saved.plan?.population !== records.length || !Array.isArray(saved.reviews)) return;
+    const plan = planAudit(records.length, saved.plan);
+    if (saved.reviews.length !== plan.sampleSize || new Set(saved.reviews.map(review => review.id)).size !== plan.sampleSize) return;
+    auditRun = { plan, startedAt: saved.startedAt, records: sampleRecords(saved.reviews) };
+  } catch { /* A damaged audit draft must not prevent the ordinary workspace opening. */ }
 }
 function restore() {
   try {
@@ -75,7 +102,12 @@ function restore() {
     name = saved.name || 'Imported spreadsheet';
     isSample = Boolean(saved.isSample);
     key = datasetKey(records);
-    selectedId = records.some(record => record.id === saved.selectedId) ? saved.selectedId : records[0].id;
+    restoreAudit();
+    inAudit = Boolean(saved.inAudit && auditRun);
+    allRowsView = inAudit ? saved.allRowsView : null;
+    if (inAudit) $('#audit-panel').open = true;
+    const visible = visibleRecords();
+    selectedId = visible.some(record => record.id === saved.selectedId) ? saved.selectedId : visible[0].id;
     expanded = saved.expanded === null ? null : STATUS[saved.expanded] ? saved.expanded : 'pending';
     for (const status of Object.keys(STATUS)) {
       if (saved.queues?.[status]) queues[status] = { page: Number(saved.queues[status].page) || 1, size: [1, 10, 50].includes(saved.queues[status].size) ? saved.queues[status].size : 10 };
@@ -87,7 +119,7 @@ function restore() {
 function renderNavigation() {
   const navigation = $('#navigators');
   navigation.innerHTML = Object.entries(STATUS).map(([status, meta], index) => {
-    const items = queueRecords(status), count = records.filter(record => record.status === status).length;
+    const items = queueRecords(status), count = visibleRecords().filter(record => record.status === status).length;
     const paged = paginate(items, queues[status].page, queues[status].size);
     queues[status].page = paged.page;
     const open = expanded === status;
@@ -95,31 +127,102 @@ function renderNavigation() {
   }).join('');
 }
 function renderProgress() {
-  const reviewed = records.filter(record => record.status !== 'pending').length;
-  const accepted = records.filter(record => record.status === 'accepted').length;
-  const rejected = records.filter(record => record.status === 'rejected').length;
-  const inconclusive = records.filter(record => record.status === 'inconclusive').length;
-  const percent = records.length ? Math.round(reviewed / records.length * 100) : 0;
+  const visible = visibleRecords();
+  const reviewed = visible.filter(record => record.status !== 'pending').length;
+  const accepted = visible.filter(record => record.status === 'accepted').length;
+  const rejected = visible.filter(record => record.status === 'rejected').length;
+  const inconclusive = visible.filter(record => record.status === 'inconclusive').length;
+  const percent = visible.length ? Math.round(reviewed / visible.length * 100) : 0;
   $('#reviewed-count').textContent = reviewed;
-  $('#total-count').textContent = records.length;
-  $('#remaining-count').textContent = records.length - reviewed;
+  $('#total-count').textContent = visible.length;
+  $('#remaining-count').textContent = visible.length - reviewed;
   $('#progress-percent').textContent = `${percent}%`;
   $('#progress-fill').style.width = `${percent}%`;
   $('#progress-track').setAttribute('aria-valuenow', percent);
   $('#progress-description').textContent = reviewed ? `${accepted} accepted · ${rejected} rejected · ${inconclusive} inconclusive` : 'Every review brings the data into focus.';
-  $('#export-button').disabled = records.length === 0;
+  $('#export-button').disabled = visible.length === 0;
+  $('#export-label').textContent = inAudit ? 'Export audit receipt' : 'Export reviews';
   $('#dataset-label').textContent = name;
   $('#dataset-label').title = name;
-  $('#dataset-meta').textContent = `${records.length} assets · ${isSample ? 'Repository sample' : 'Imported spreadsheet'}`;
+  $('#dataset-meta').textContent = inAudit ? `${visible.length} of ${records.length} rows · Frozen sample` : `${records.length} assets · ${isSample ? 'Repository sample' : 'Imported spreadsheet'}`;
   $('#sample-badge').hidden = !isSample;
+  renderAudit();
+}
+function auditResult() {
+  const counts = { correct: 0, incorrect: 0, inconclusive: 0, remaining: 0 };
+  const outcomes = { accepted: 'correct', rejected: 'incorrect', inconclusive: 'inconclusive', pending: 'remaining' };
+  for (const record of auditRun.records) counts[outcomes[record.status]]++;
+  return evaluateAudit(auditRun.plan, counts);
+}
+function describePlan(plan) {
+  const size = plan.sampleSize === plan.population
+    ? `This audit checks all ${plan.population} ${plan.population === 1 ? 'row' : 'rows'}.`
+    : `This audit checks ${plan.sampleSize} of ${plan.population} rows, selected at random.`;
+  return `${size} At least ${plan.criticalCorrect} ${plan.criticalCorrect === 1 ? 'row must be' : 'rows must be'} confirmed correct to show accuracy above ${percent(plan.floor)}.`;
+}
+function renderAudit() {
+  $('#audit-panel').hidden = records.length === 0;
+  $('#audit-form').hidden = Boolean(auditRun);
+  $('#audit-demo').hidden = !isSample || records.length !== 5;
+  $('#audit-run').hidden = !auditRun;
+  if (!auditRun) return;
+  $('#audit-toggle').textContent = inAudit ? 'Back to all rows' : 'Open frozen sample';
+  $('#audit-export').hidden = inAudit;
+  $('#audit-plan').textContent = describePlan(auditRun.plan);
+  const result = auditResult();
+  const labels = {
+    pending: `${result.remaining} ${result.remaining === 1 ? 'row' : 'rows'} left to review.`,
+    pass: `Threshold check passed. The sample supports accuracy above ${percent(auditRun.plan.floor)}.`,
+    'not-demonstrated': `The sample did not demonstrate accuracy above ${percent(auditRun.plan.floor)}.`,
+    inconclusive: 'The threshold check is inconclusive because some rows could not be verified.',
+  };
+  $('#audit-result').textContent = `${labels[result.status]} ${result.correct} correct · ${result.incorrect} incorrect · ${result.inconclusive} inconclusive.`;
+  const interval = result.confidenceInterval;
+  $('#audit-interval').hidden = !interval;
+  if (!interval) return;
+  const allRowsChecked = auditRun.plan.sampleSize === auditRun.plan.population;
+  const qualification = result.inconclusive ? ' The range allows for either outcome on unclear rows.' : '';
+  const range = `${percent(interval.lower)} to ${percent(interval.upper)}`;
+  if (allRowsChecked) {
+    const accuracy = result.inconclusive ? `Possible copying accuracy: ${range}.` : `Exact copying accuracy: ${percent(interval.lower)}.`;
+    $('#audit-interval').textContent = `${accuracy} All rows were checked.${qualification}`;
+  } else {
+    $('#audit-interval').textContent = `${percent(interval.level)} confidence interval for this sheet’s copying accuracy: ${range}.${qualification}`;
+  }
+}
+function clearAuditPreview() {
+  auditPreview = null;
+  $('#audit-start').disabled = true;
+  $('#audit-error').hidden = true;
+  $('#audit-preview').hidden = true;
+}
+function reportAuditError(error) {
+  $('#audit-error').textContent = error.message;
+  $('#audit-error').hidden = false;
+}
+function switchAuditView(enabled) {
+  const previous = allRowsView;
+  allRowsView = enabled ? { selectedId, expanded } : null;
+  inAudit = enabled;
+  const visible = visibleRecords();
+  const selected = (!enabled && visible.find(record => record.id === previous?.selectedId))
+    || visible.find(record => record.status === 'pending') || visible[0];
+  const previousQueue = previous?.expanded;
+  expanded = !enabled && (previousQueue === null || Object.hasOwn(STATUS, previousQueue)) ? previousQueue : selected.status;
+  query = '';
+  $('#asset-search').value = '';
+  Object.values(queues).forEach(queue => { queue.page = 1; });
+  selectAsset(selected.id, { alignPage: true });
+  renderProgress();
 }
 function neighbor(direction) {
   const items = queueRecords();
   if (!items.length) return null;
   const index = items.findIndex(record => record.id === selectedId);
   if (index >= 0) return items[index + direction] || null;
-  const globalIndex = records.findIndex(record => record.id === selectedId);
-  return direction > 0 ? items.find(record => records.indexOf(record) > globalIndex) || null : [...items].reverse().find(record => records.indexOf(record) < globalIndex) || null;
+  const visible = visibleRecords();
+  const globalIndex = visible.findIndex(record => record.id === selectedId);
+  return direction > 0 ? items.find(record => visible.indexOf(record) > globalIndex) || null : [...items].reverse().find(record => visible.indexOf(record) < globalIndex) || null;
 }
 function renderDecision() {
   const record = current();
@@ -148,7 +251,8 @@ function renderCurrent() {
   $('#asset-id').textContent = record.id;
   $('#row-label').textContent = `Row ${record.rowNumber}`;
   $('#asset-title').textContent = record.title;
-  $('#asset-position').textContent = `${records.indexOf(record) + 1} / ${records.length}`;
+  const visible = visibleRecords();
+  $('#asset-position').textContent = `${visible.indexOf(record) + 1} / ${visible.length}`;
   $('#field-count').textContent = `${record.fields.length} fields`;
   $('#claim-fields').innerHTML = record.fields.length ? record.fields.map(renderClaim).join('') : '<div><dd>No claim fields were supplied in this row.</dd></div>';
   const source = safeSourceUrl(record.sourceUrl);
@@ -209,6 +313,10 @@ function openDataset(importedRecords, { datasetName, sample = false, previousSam
   selectedId = (records.find(record => record.status === 'pending') || records[0])?.id || null;
   expanded = records.some(record => record.status === 'pending') ? 'pending' : records[0]?.status || 'pending';
   name = datasetName || 'Imported spreadsheet'; isSample = sample;
+  restoreAudit();
+  inAudit = false;
+  allRowsView = null;
+  clearAuditPreview();
   query = '';
   $('#asset-search').value = '';
   Object.values(queues).forEach(queue => { queue.page = 1; });
@@ -264,8 +372,59 @@ function download(content, filename, mime) {
   document.body.append(anchor); anchor.click(); anchor.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
+function exportAudit() {
+  const receipt = {
+    dataset: name, datasetKey: key, startedAt: auditRun.startedAt, exportedAt: new Date().toISOString(),
+    method: { threshold: 'one-sided exact hypergeometric', interval: 'two-sided exact hypergeometric' },
+    plan: auditRun.plan, result: auditResult(), sample: auditRun.records.map((record, index) => ({
+      drawOrder: index + 1, rowNumber: record.rowNumber, sourceUrl: record.sourceUrl, ...reviewDecision(record),
+    })),
+  };
+  const filename = name.replace(/\.[^.]+$/, '').replace(/[^\w\s.-]/g, '_');
+  download(JSON.stringify(receipt, null, 2) + '\n', `${filename}-accuracy-audit.json`, 'application/json');
+  notify('Audit receipt downloaded.');
+}
 $('#export-button').addEventListener('click', () => {
-  try { download(toCsv(records), `${name.replace(/\.[^.]+$/, '').replace(/[^\w\s.-]/g, '_')}-reviewed.csv`, 'text/csv;charset=utf-8'); notify('Review export downloaded.'); }
+  try {
+    if (inAudit) { exportAudit(); return; }
+    download(toCsv(records), `${name.replace(/\.[^.]+$/, '').replace(/[^\w\s.-]/g, '_')}-reviewed.csv`, 'text/csv;charset=utf-8');
+    notify('Review export downloaded.');
+  }
+  catch (error) { notice(error.message); }
+});
+$('#audit-form').addEventListener('input', clearAuditPreview);
+$('#audit-form').addEventListener('submit', event => {
+  event.preventDefault();
+  if (auditRun || !records.length) return;
+  clearAuditPreview();
+  const proportion = id => {
+    const value = $(`#audit-${id}`).value.trim();
+    return value ? Number(value) / 100 : NaN;
+  };
+  try {
+    auditPreview = planAudit(records.length, {
+      alpha: proportion('alpha'), floor: proportion('floor'),
+      designAccuracy: proportion('target'), power: proportion('power'),
+    });
+    $('#audit-preview').textContent = describePlan(auditPreview);
+    $('#audit-preview').hidden = false;
+    $('#audit-start').disabled = false;
+  } catch (error) { reportAuditError(error); }
+});
+$('#audit-start').addEventListener('click', () => {
+  if (!auditPreview || auditRun) return;
+  try {
+    const ids = drawAuditSample(records.map(record => record.id), auditPreview.sampleSize);
+    auditRun = { plan: auditPreview, startedAt: new Date().toISOString(), records: sampleRecords(ids.map(id => ({ id }))) };
+  } catch (error) { reportAuditError(error); return; }
+  clearAuditPreview();
+  switchAuditView(true);
+  $('#audit-toggle').focus();
+});
+$('#audit-toggle').addEventListener('click', () => { if (auditRun) switchAuditView(!inAudit); });
+$('#audit-export').addEventListener('click', () => {
+  if (!auditRun) return;
+  try { exportAudit(); }
   catch (error) { notice(error.message); }
 });
 function importError(message = '') { $('#import-error').textContent = message; $('#import-error').hidden = !message; }

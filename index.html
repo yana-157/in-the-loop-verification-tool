@@ -22,10 +22,46 @@
     <div class="sidebar-bottom"><span class="local-dot"></span><div>Private by default<small>Reviews stay in this browser.</small></div><button class="icon-button" id="help-button" aria-label="Open help"><span data-icon="help"></span></button></div>
   </aside>
   <div class="app-shell">
-    <header class="topbar"><div class="breadcrumb"><span data-icon="layers"></span><span>Workspace</span><span class="slash">/</span><strong>Verification</strong></div><div class="top-actions"><span class="save-status" id="save-status"><span class="local-dot"></span>Saved locally</span><button class="button quiet" id="export-button"><span data-icon="download"></span>Export reviews</button><button class="button primary" id="import-button"><span data-icon="plus"></span>Import spreadsheet</button></div></header>
+    <header class="topbar"><div class="breadcrumb"><span data-icon="layers"></span><span>Workspace</span><span class="slash">/</span><strong>Verification</strong></div><div class="top-actions"><span class="save-status" id="save-status"><span class="local-dot"></span>Saved locally</span><button class="button quiet" id="export-button"><span data-icon="download"></span><span id="export-label">Export reviews</span></button><button class="button primary" id="import-button"><span data-icon="plus"></span>Import spreadsheet</button></div></header>
     <main id="review-workspace" tabindex="-1">
       <div class="page-heading"><div><h1>Review the evidence<span>.</span></h1><p>Open the original source and compare it with the recorded claims.</p></div><span class="sample-badge" id="sample-badge"><span data-icon="spark"></span>Repository sample</span></div>
       <section class="progress-panel" aria-label="Verification progress"><div class="progress-copy"><span class="progress-icon" data-icon="chart"></span><div><strong><span id="reviewed-count">0</span> <span class="subtle">of <span id="total-count">0</span> assets reviewed</span></strong><small id="progress-description">Every review brings the data into focus.</small></div></div><div class="progress-visual"><div class="progress-label"><span><strong id="remaining-count">0</strong> remaining</span><strong id="progress-percent">0%</strong></div><div class="progress-track" id="progress-track" role="progressbar" aria-label="Assets reviewed" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="progress-fill"></div></div></div></section>
+      <details class="audit-panel" id="audit-panel" hidden>
+        <summary>Random-sample verification</summary>
+        <p>Open the cited source for each sampled row. Mark it correct if the recorded claims match what the publisher says, incorrect if a claim differs, or inconclusive if the source is unclear or unavailable.</p>
+        <form id="audit-form" novalidate>
+          <p>The default check tests whether more than 90% of the sheet was copied correctly.</p>
+          <details class="audit-options">
+            <summary>Adjust audit settings</summary>
+            <div class="audit-settings">
+              <label class="form-field">Accuracy threshold (%)<input id="audit-floor" type="number" min="0" max="100" step="any" value="90" required></label>
+              <label class="form-field">Expected accuracy (%)<input id="audit-target" type="number" min="0" max="100" step="any" value="98" required></label>
+              <label class="form-field">False-pass risk (%)<input id="audit-alpha" type="number" min="0" max="100" step="any" value="5" required></label>
+              <label class="form-field">Desired power (%)<input id="audit-power" type="number" min="0" max="100" step="any" value="80" required></label>
+            </div>
+            <p>False-pass risk limits the chance of passing a sheet at or below the threshold. Power is the chance of passing when the sheet has the expected accuracy.</p>
+          </details>
+          <p id="audit-demo" hidden>For a quick demo with these five rows, try a 50% threshold to draw three rows and see a range.</p>
+          <div class="audit-actions">
+            <button type="submit" class="button quiet">Calculate sample</button>
+            <button type="button" class="button primary" id="audit-start" disabled>Freeze random sample</button>
+          </div>
+          <p class="form-error" id="audit-error" role="alert" hidden></p>
+          <p id="audit-preview" role="status" hidden></p>
+        </form>
+        <div id="audit-run" hidden>
+          <p id="audit-plan"></p>
+          <div class="audit-results" role="status">
+            <p id="audit-result"></p>
+            <p id="audit-interval" hidden></p>
+          </div>
+          <p>The threshold check tests a specific target. The confidence interval shows the uncertainty in this sheet’s copying accuracy.</p>
+          <div class="audit-actions">
+            <button type="button" class="button quiet" id="audit-toggle">Back to all rows</button>
+            <button type="button" class="button quiet" id="audit-export">Export audit receipt</button>
+          </div>
+        </div>
+      </details>
       <div id="notice" class="notice" role="status" hidden></div>
       <section class="review-section" id="review-section" aria-label="Current asset">
         <div class="asset-heading"><div><div class="asset-kicker"><span id="asset-id">ASSET</span><span class="dot-separator">·</span><span id="row-label">Row 2</span><span class="status-pill pending" id="current-status">Pending review</span></div><h2 id="asset-title">Loading evidence</h2></div><div class="asset-nav"><button class="icon-button" id="previous-asset" aria-label="Previous asset"><span data-icon="left"></span></button><span id="asset-position"></span><button class="icon-button" id="next-asset" aria-label="Next asset"><span data-icon="right"></span></button></div></div>
