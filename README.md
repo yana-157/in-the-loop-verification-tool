@@ -1,4 +1,4 @@
-# In The Loop: Verification Tool
+# In The Loop Verification Tool
 
 A static review workspace for comparing agent-collected screenshots with scraped spreadsheet data. Inspect the evidence beside its claimed values, then mark each asset **incorrect**, **inconclusive**, or **correct**.
 
