@@ -1,17 +1,13 @@
-# Evidence sample
+# Public evidence sample
 
-These five records pair existing repository evidence with its captured screenshot. Every record begins without a rating; this sample does not import earlier review decisions.
+These five unrated records link to the webpages that supplied the collected details.
 
-The JPEGs are unchanged copies of the tracked files under `data/recovery/verification/`. They were captured through live Chrome on November 21, 2026. They are evidence crops, not full-page screenshots, and total approximately 46 KB. See [`data/recovery/SAMPLING.md`](../../data/recovery/SAMPLING.md) for the original capture context and [`public_documents_2026-11-21.json`](../../data/recovery/public_documents_2026-11-21.json) for the frozen text passages.
-
-| Record | Original screenshot | Claim source |
+| Record | Original page | What to check |
 | --- | --- | --- |
-| FMC-001 | `faridabad-capacity.jpg` | Frozen Faridabad capacity passage |
-| FMC-002 | `faridabad-address.jpg` | Captured homepage footer address; line breaks normalized to spaces |
-| ARTI-001 | `arti-budge-address.jpg` | Frozen Budge Budge branch-address passage |
-| ARTI-002 | `arti-dialysis-listing.jpg` | Frozen common-footer dialysis mention |
-| ARTI-003 | `arti-group-capacity.jpg` | Frozen corporate About-page bed statement |
+| FMC-001 | [Faridabad Medical Center home](https://faridabadmedicalcenter.com/home/) | The bed-capacity sentence and its scope |
+| FMC-002 | [Faridabad Medical Center contact page](https://faridabadmedicalcenter.com/contact-us/) | The published facility address |
+| ARTI-001 | [Arti Hospital Budge Budge branch](https://artihospital.com/site_content/budgebudge_branch) | The named branch’s address |
+| ARTI-002 | [Arti Hospital Budge Budge branch](https://artihospital.com/site_content/budgebudge_branch) | The shared footer’s dialysis mention |
+| ARTI-003 | [Arti Hospital About page](https://artihospital.com/site_content/about) | The group’s 103-bed statement |
 
-`publication_context` explains the available source context. For the Arti records, the shared footer and group About page do not establish branch-specific capacity or service availability. Review the exact claim and its scope before assigning a rating.
-
-The bundled `screenshot_path` values are relative to the app root (`./samples/assets/...`) so the sample works on GitHub Pages without depending on external image requests. To use the original repository files in another spreadsheet, use paths such as `data/recovery/verification/faridabad-capacity.jpg` with repository `augustchu/datathon-F26` and ref `main`.
+Compare the exact wording with the recorded claim, including the branch and scope. Arti Hospital uses a shared footer and group About page, so the relevant wording may apply across locations.

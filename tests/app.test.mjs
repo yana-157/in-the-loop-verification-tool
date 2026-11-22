@@ -5,7 +5,7 @@ import vm from 'node:vm';
 import * as data from '../lib/data.js';
 
 // A small DOM adapter exercises the app's actual event handlers without a browser
-// dependency. Layout, image rendering, and XLSX uploads are covered by browser QA.
+// dependency. Layout and XLSX uploads can also be exercised in a real browser.
 const appSource = readFileSync(new URL('../app.js', import.meta.url), 'utf8')
   .replace(/^import[^\n]+\n/, '')
   .replaceAll('import.meta.url', "'http://localhost:4173/app.js'");
@@ -41,7 +41,7 @@ function fixture(count = 64) {
   return data.normalizeRows(Array.from({ length: count }, (_, index) => ({
     id: `asset-${index + 1}`,
     title: `Asset ${index + 1}`,
-    screenshot_path: `assets/${index + 1}.png`,
+    source_url: `https://example.com/source/${index + 1}`,
     claim: `Claim ${index + 1}`,
   })));
 }
@@ -57,7 +57,6 @@ async function harness(records = fixture(), savedStorage) {
   });
   const storage = savedStorage || new Map([[storageKey, JSON.stringify({
     records, selectedId: records[0].id, expanded: 'pending',
-    settings: { repository: 'yana-157/in-the-loop-verification-tool', ref: 'main' },
     name: 'Test spreadsheet', isSample: false,
   })]]);
   let objectUrls = 0;
@@ -73,6 +72,10 @@ async function harness(records = fixture(), savedStorage) {
       getElementById: id => get(`#${id}`),
       addEventListener() {},
     },
+    fetch: async () => ({
+      ok: true,
+      text: async () => readFileSync(new URL('../samples/evidence.csv', import.meta.url), 'utf8'),
+    }),
     location: { href: 'http://localhost:4173/' },
     URL: TestURL,
     Option: class { constructor(label, value) { this.label = label; this.value = value; } },
@@ -131,53 +134,80 @@ test('reviews, notes, and selection survive a page reload', async () => {
   const app = await harness(fixture(3));
   app.clickQueue({ record: 'asset-2' });
   app.rate('inconclusive');
-  app.get('#review-notes').value = 'The screenshot does not identify this branch.';
+  app.get('#review-notes').value = 'The source does not identify this branch.';
   app.get('#review-notes').dispatch('input');
   const restored = await harness(undefined, app.storage);
   assert.equal(restored.get('#asset-id').textContent, 'asset-2');
   assert.equal(restored.get('#current-status').textContent, 'Inconclusive');
-  assert.equal(restored.get('#review-notes').value, 'The screenshot does not identify this branch.');
+  assert.equal(restored.get('#review-notes').value, 'The source does not identify this branch.');
   assert.equal(restored.get('#reviewed-count').textContent, 1);
   restored.get('#clear-rating').dispatch('click');
   assert.equal(restored.get('#reviewed-count').textContent, 0);
   assert.equal(restored.state().records[1].status, 'pending');
 });
 
-test('local attachments reject ambiguous basenames but allow repeated references to the same asset', async () => {
-  const rows = paths => data.normalizeRows(paths.map((path, index) => ({ id: String(index), asset_path: path, claim: 'Claim' })));
-  const attachmentEvent = { target: { files: [{ name: 'screen.png', type: 'image/png' }], value: 'screen.png' } };
-  const ambiguous = await harness(rows(['one/screen.png', 'two/screen.png']));
-  const originalUrl = ambiguous.get('#evidence-image').src;
-  ambiguous.get('#screenshot-files').dispatch('change', attachmentEvent);
-  assert.equal(ambiguous.get('#evidence-image').src, originalUrl);
-  assert.match(ambiguous.get('#toast').textContent, /ambiguous/i);
-  const shared = await harness(rows(['one/screen.png', 'one/screen.png']));
-  shared.get('#screenshot-files').dispatch('change', attachmentEvent);
-  assert.match(shared.get('#evidence-image').src, /^blob:/);
-  shared.clickQueue({ record: '1' });
-  assert.match(shared.get('#evidence-image').src, /^blob:/);
+test('the sample shows original links and changing records updates the destination', async () => {
+  const app = await harness(undefined, new Map());
+  assert.equal(app.get('#asset-id').textContent, 'FMC-001');
+  assert.match(app.get('#source-link').attributes.href, /^https:\/\/faridabadmedicalcenter\.com\/home\/#:~:text=/);
+  assert.equal(app.get('#source-address').textContent, app.get('#source-link').attributes.href);
+  app.clickQueue({ record: 'ARTI-003' });
+  assert.match(app.get('#source-link').attributes.href, /^https:\/\/artihospital\.com\/site_content\/about/);
+  assert.equal(app.get('#missing-source').hidden, true);
+});
+
+test('old workspace reviews remain available when a record has no usable source link', async () => {
+  const old = fixture(2).map(record => ({ ...record, assetPath: 'review.png' }));
+  old[0].sourceUrl = 'javascript:alert(1)';
+  old[0].status = 'inconclusive';
+  old[0].notes = 'The published total applies to the group.';
+  const app = await harness(old);
+  assert.equal(app.get('#source-link').hidden, true);
+  assert.equal(app.get('#source-link').attributes.href, undefined);
+  assert.equal(app.get('#missing-source').hidden, false);
+  assert.equal(app.get('#current-status').textContent, 'Inconclusive');
+  assert.equal(app.get('#review-notes').value, old[0].notes);
+  app.clickQueue({ record: 'asset-2' });
+  assert.equal(app.get('#source-link').hidden, false);
+  assert.equal(app.get('#source-link').attributes.href, 'https://example.com/source/2');
+  assert.equal(app.get('#missing-source').hidden, true);
+});
+
+test('an active legacy sample keeps its decisions when the link sample replaces it', async () => {
+  const old = {
+    id: 'FMC-001', title: 'Old sample', assetPath: './samples/assets/faridabad-capacity.jpg',
+    sourceUrl: 'https://faridabadmedicalcenter.com/home/', fields: [{ name: 'claim', value: '35 beds' }],
+    original: { id: 'FMC-001' }, status: 'accepted', notes: 'Reviewed in the old sample.', reviewedAt: '2026-11-22',
+  };
+  const storage = new Map([[storageKey, JSON.stringify({ records: [old], isSample: true, selectedId: old.id })]]);
+  const app = await harness(undefined, storage);
+  const [first] = app.state().records;
+  assert.equal(first.id, old.id);
+  assert.equal(first.status, old.status);
+  assert.equal(first.notes, old.notes);
+  assert.equal(first.reviewedAt, old.reviewedAt);
+  assert.equal(Object.hasOwn(first, 'assetPath'), false);
+  assert.match(first.sourceUrl, /#:~:text=/);
 });
 
 test('the import dialog honors canonical mappings from a reviewed CSV export', async () => {
   const app = await harness(fixture(1));
   const custom = data.normalizeRows([{
-    id: 'old-id', custom_id: 'chosen-id', asset_path: 'old.png', image: 'chosen.png',
+    id: 'old-id', custom_id: 'chosen-id', source_url: 'https://example.com/old', page: 'https://example.com/chosen',
     title: 'Old title', custom_title: 'Chosen title', claim: 'Claim',
-  }], { idColumn: 'custom_id', assetColumn: 'image', titleColumn: 'custom_title' });
+  }], { idColumn: 'custom_id', sourceColumn: 'page', titleColumn: 'custom_title' });
   custom[0].status = 'rejected';
   const csv = data.toCsv(custom);
   await app.get('#spreadsheet-file').dispatch('change', {
     target: { files: [{ name: 'reviewed.csv', size: csv.length, text: async () => csv }] },
   });
-  assert.equal(app.get('#asset-column').value, 'review_asset_path');
+  assert.equal(app.get('#source-column').value, 'review_source_url');
   assert.equal(app.get('#id-column').value, 'review_asset_id');
   assert.equal(app.get('#title-column').value, 'review_asset_title');
-  app.get('#repository-input').value = 'yana-157/in-the-loop-verification-tool';
-  app.get('#ref-input').value = 'main';
   app.get('#import-form').dispatch('submit');
   const [imported] = app.state().records;
   assert.equal(imported.id, 'chosen-id');
-  assert.equal(imported.assetPath, 'chosen.png');
+  assert.equal(imported.sourceUrl, 'https://example.com/chosen');
   assert.equal(imported.title, 'Chosen title');
   assert.equal(imported.status, 'rejected');
 });

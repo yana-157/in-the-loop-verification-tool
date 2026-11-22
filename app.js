@@ -1,4 +1,4 @@
-import { parseDelimited, normalizeRows, resolveAssetUrl, safeSourceUrl, toCsv, paginate, datasetKey } from './lib/data.js';
+import { parseDelimited, normalizeRows, SOURCE_KEYS, safeSourceUrl, toCsv, paginate, datasetKey, legacyDatasetKey } from './lib/data.js';
 
 const $ = selector => document.querySelector(selector);
 const paths = {
@@ -7,9 +7,6 @@ const paths = {
   layers: '<path d="m12 3 9 5-9 5-9-5 9-5Zm-9 9 9 5 9-5M3 16l9 5 9-5"/>',
   download: '<path d="M12 3v12m-5-5 5 5 5-5M4 15v5h16v-5"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
-  minus: '<path d="M5 12h14"/>',
-  image: '<rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8" cy="8" r="1.5"/><path d="m3 17 5-5 4 4 4-6 5 7"/>',
-  expand: '<path d="M8 3H3v5m13-5h5v5M3 16v5h5m8 0h5v-5"/>',
   link: '<path d="m10 13 4-4m-6 7-1 1a4 4 0 0 1-6-6l5-5a4 4 0 0 1 6 0m0 12a4 4 0 0 0 6 0l5-5a4 4 0 0 0-6-6l-1 1" transform="translate(1 -1) scale(.9)"/>',
   external: '<path d="M14 3h7v7m0-7L10 14M10 3H3v18h18v-7"/>',
   note: '<path d="M9 4H4v16h16v-5M14 3l7 7-8 8-5 1 1-5 8-8M14 6l4 4"/>',
@@ -36,12 +33,11 @@ const STATUS = {
   inconclusive: { label: 'Inconclusive', pill: 'Inconclusive', icon: 'question' },
 };
 const STORAGE = 'in-the-loop:active:v1';
-let records = [], selectedId = null, expanded = 'pending', query = '', zoom = 100;
-let settings = { repository: 'yana-157/in-the-loop-verification-tool', ref: 'main' };
+let records = [], selectedId = null, expanded = 'pending', query = '';
+let replaceLegacySample = false;
 let name = 'Repository evidence', isSample = true, key = '', saveFailed = false;
 const queues = Object.fromEntries(Object.keys(STATUS).map(status => [status, { page: 1, size: 10 }]));
 let pendingImport = null, workbook = null, loadedFileName = '', toastTimeout, importSequence = 0;
-let localFiles = new Map(), localUrls = new Set();
 
 function notify(message) {
   $('#toast').textContent = message;
@@ -55,11 +51,11 @@ function notice(message) {
 }
 function current() { return records.find(record => record.id === selectedId); }
 function queueRecords(status = expanded || current()?.status || 'pending') {
-  return records.filter(record => record.status === status && (!query || [record.id, record.title, record.assetPath, ...record.fields.map(field => field.value)].some(value => String(value).toLowerCase().includes(query))));
+  return records.filter(record => record.status === status && (!query || [record.id, record.title, record.sourceUrl, ...record.fields.map(field => field.value)].some(value => String(value).toLowerCase().includes(query))));
 }
 function persist() {
   try {
-    localStorage.setItem(STORAGE, JSON.stringify({ records, settings, name, isSample, key, selectedId, expanded, queues, autoAdvance: $('#auto-advance').checked }));
+    localStorage.setItem(STORAGE, JSON.stringify({ records, name, isSample, key, selectedId, expanded, queues, autoAdvance: $('#auto-advance').checked }));
     if (key) localStorage.setItem(key, JSON.stringify(records.map(({ id, status, notes, reviewedAt }) => ({ id, status, notes, reviewedAt }))));
     saveFailed = false;
     $('#save-status').innerHTML = '<span class="local-dot"></span>Saved locally';
@@ -73,9 +69,9 @@ function restore() {
   try {
     const saved = JSON.parse(localStorage.getItem(STORAGE));
     if (!saved || !Array.isArray(saved.records) || !saved.records.length) return false;
-    if (!saved.records.every(record => typeof record.id === 'string' && typeof record.title === 'string' && typeof record.assetPath === 'string' && Array.isArray(record.fields) && STATUS[record.status] && record.original)) return false;
-    records = saved.records;
-    settings = saved.settings || settings;
+    if (!saved.records.every(record => typeof record.id === 'string' && typeof record.title === 'string' && Array.isArray(record.fields) && Object.hasOwn(STATUS, record.status) && record.original)) return false;
+    replaceLegacySample = saved.isSample && saved.records.some(record => Object.hasOwn(record, 'assetPath'));
+    records = saved.records.map(({ assetPath, sourceUrl, ...record }) => ({ ...record, sourceUrl: safeSourceUrl(sourceUrl) }));
     name = saved.name || 'Imported spreadsheet';
     isSample = Boolean(saved.isSample);
     key = datasetKey(records);
@@ -136,46 +132,13 @@ function renderDecision() {
   $('#previous-asset').disabled = !neighbor(-1);
   $('#next-asset').disabled = !neighbor(1);
 }
-function filename(path) {
-  try { return decodeURIComponent(String(path).split(/[?#]/)[0].split('/').pop()).toLowerCase(); }
-  catch { return String(path).split('/').pop().toLowerCase(); }
-}
-function imageUrl(record) {
-  const attached = localFiles.get(record.assetPath) || localFiles.get(filename(record.assetPath));
-  if (attached) return attached;
-  return resolveAssetUrl(record.assetPath, { ...settings, ...(record.assetPath.startsWith('./') ? { baseUrl: new URL('.', location.href).href } : {}) });
-}
-function imageState(title, description) {
-  $('#image-state').hidden = false;
-  $('#image-state strong').textContent = title;
-  $('#image-state p').textContent = description;
-}
-function loadImage(record) {
-  const img = $('#evidence-image');
-  img.hidden = true;
-  img.removeAttribute('src');
-  img.alt = `Captured screenshot for ${record.title}`;
-  $('#image-path').textContent = record.assetPath;
-  $('#image-path').title = record.assetPath;
-  $('#expand-image').disabled = true;
-  imageState('Loading screenshot…', 'Opening the image linked in this spreadsheet row.');
-  try {
-    const url = imageUrl(record);
-    img.onload = () => {
-      img.hidden = false;
-      $('#image-state').hidden = true;
-      $('#expand-image').disabled = false;
-    };
-    img.onerror = () => imageState('Screenshot unavailable', 'Check the file path or attach the screenshot below. Private GitHub images need a local attachment or a publicly accessible image URL.');
-    img.src = url;
-  } catch (error) { imageState('Check the screenshot path', error.message); }
-}
-function setZoom(value) {
-  zoom = Math.max(50, Math.min(300, value));
-  $('#evidence-image').style.width = `${zoom}%`;
-  $('#zoom-reset').textContent = `${zoom}%`;
-  $('#zoom-out').disabled = zoom <= 50;
-  $('#zoom-in').disabled = zoom >= 300;
+function renderClaim(field) {
+  const value = escapeHtml(field.value || '—');
+  const source = /^(candidate[\s_-]+)?source[\s_-]+url$/i.test(field.name.trim()) && safeSourceUrl(field.value);
+  const content = source
+    ? `<a class="claim-source" href="${escapeHtml(source)}" target="_blank" rel="noopener noreferrer">${value}</a>`
+    : value;
+  return `<div><dt>${escapeHtml(field.name.replaceAll('_', ' '))}</dt><dd>${content}</dd></div>`;
 }
 function renderCurrent() {
   const record = current();
@@ -187,15 +150,14 @@ function renderCurrent() {
   $('#asset-title').textContent = record.title;
   $('#asset-position').textContent = `${records.indexOf(record) + 1} / ${records.length}`;
   $('#field-count').textContent = `${record.fields.length} fields`;
-  $('#claim-fields').innerHTML = record.fields.length ? record.fields.map(field => `<div><dt>${escapeHtml(field.name.replaceAll('_', ' '))}</dt><dd>${escapeHtml(field.value || '—')}</dd></div>`).join('') : '<div><dd>No claim fields were supplied in this row.</dd></div>';
+  $('#claim-fields').innerHTML = record.fields.length ? record.fields.map(renderClaim).join('') : '<div><dd>No claim fields were supplied in this row.</dd></div>';
   const source = safeSourceUrl(record.sourceUrl);
   $('#source-link').hidden = !source;
-  if (source) $('#source-link').href = source;
+  if (source) $('#source-link').setAttribute('href', source);
   else $('#source-link').removeAttribute('href');
+  $('#source-address').textContent = source;
+  $('#missing-source').hidden = Boolean(source);
   $('#review-notes').value = record.notes || '';
-  $('#image-viewport').scrollTo(0, 0);
-  setZoom(100);
-  loadImage(record);
   renderDecision();
 }
 function renderAll() { renderProgress(); renderNavigation(); renderCurrent(); }
@@ -221,19 +183,16 @@ function rate(status) {
   notify(status === 'pending' ? 'Decision cleared. Asset is back in To verify.' : `${STATUS[status].pill} · ${saveFailed ? 'export to save your review' : 'review saved'}`);
   if ($('#auto-advance').checked && next && status !== 'pending') selectAsset(next.id, { alignPage: true });
 }
-function revokeLocalImages() {
-  localUrls.forEach(url => URL.revokeObjectURL(url));
-  localUrls = new Set(); localFiles = new Map();
-}
-function openDataset(importedRecords, { datasetName, sample = false, repository = settings.repository, ref = settings.ref } = {}) {
-  revokeLocalImages();
+function openDataset(importedRecords, { datasetName, sample = false, previousSample } = {}) {
   records = importedRecords;
   key = datasetKey(records);
   // Explicit decisions in an imported review export take precedence over an older local draft.
   const includesReviews = records.some(record => Object.keys(record.original).some(column => column.trim().toLowerCase().replace(/[\s-]+/g, '_') === 'review_status'));
   if (!includesReviews) {
     try {
-      const draft = JSON.parse(localStorage.getItem(key));
+      const legacyKey = legacyDatasetKey(records);
+      const savedDraft = localStorage.getItem(key) ?? (legacyKey && localStorage.getItem(legacyKey));
+      const draft = previousSample ?? (savedDraft ? JSON.parse(savedDraft) : null);
       if (Array.isArray(draft)) {
         const byId = new Map(draft.map(review => [review.id, review]));
         records.forEach(record => {
@@ -250,16 +209,16 @@ function openDataset(importedRecords, { datasetName, sample = false, repository 
   selectedId = (records.find(record => record.status === 'pending') || records[0])?.id || null;
   expanded = records.some(record => record.status === 'pending') ? 'pending' : records[0]?.status || 'pending';
   name = datasetName || 'Imported spreadsheet'; isSample = sample;
-  settings = { repository, ref }; query = '';
+  query = '';
   $('#asset-search').value = '';
   Object.values(queues).forEach(queue => { queue.page = 1; });
   notice(''); persist(); renderAll();
 }
-async function loadSample() {
+async function loadSample(previousSample) {
   try {
     const response = await fetch(new URL('./samples/evidence.csv', import.meta.url));
     if (!response.ok) throw new Error(`Could not load the sample (${response.status}).`);
-    openDataset(normalizeRows(parseDelimited(await response.text()).rows), { datasetName: 'Repository evidence', sample: true });
+    openDataset(normalizeRows(parseDelimited(await response.text()).rows), { datasetName: 'Repository evidence', sample: true, previousSample });
   } catch (error) { notice(error.message); renderAll(); }
 }
 
@@ -299,33 +258,6 @@ $('#review-notes').addEventListener('input', event => {
   const record = current();
   if (record) { record.notes = event.target.value; if (record.status !== 'pending') record.reviewedAt = new Date().toISOString(); persist(); }
 });
-$('#zoom-in').addEventListener('click', () => setZoom(zoom + 25));
-$('#zoom-out').addEventListener('click', () => setZoom(zoom - 25));
-$('#zoom-reset').addEventListener('click', () => setZoom(100));
-$('#expand-image').addEventListener('click', () => {
-  if (!current() || $('#evidence-image').hidden) return;
-  $('#expanded-image').src = $('#evidence-image').src;
-  $('#expanded-title').textContent = current().title;
-  $('#image-dialog').showModal();
-});
-$('#attach-button').addEventListener('click', () => $('#screenshot-files').click());
-$('#screenshot-files').addEventListener('change', event => {
-  let matched = 0, ambiguous = 0;
-  const files = Array.from(event.target.files);
-  const counts = new Map();
-  files.forEach(file => counts.set(file.name.toLowerCase(), (counts.get(file.name.toLowerCase()) || 0) + 1));
-  for (const file of files) {
-    if (!file.type.startsWith('image/') || counts.get(file.name.toLowerCase()) > 1) continue;
-    const matching = records.filter(record => filename(record.assetPath) === file.name.toLowerCase());
-    if (!matching.length) continue;
-    if (new Set(matching.map(record => record.assetPath)).size > 1) { ambiguous++; continue; }
-    const url = URL.createObjectURL(file); localUrls.add(url);
-    matching.forEach(record => { localFiles.set(record.assetPath, url); matched++; });
-  }
-  if (current()) loadImage(current());
-  notify(ambiguous ? `Skipped ${ambiguous} ambiguous filenames. Give screenshots in different folders unique filenames. ${matched} assets attached.` : matched ? `Attached screenshots for ${matched} assets. Reattach after refreshing.` : 'No filenames matched. Use the same image filename as the spreadsheet.');
-  event.target.value = '';
-});
 function download(content, filename, mime) {
   const url = URL.createObjectURL(new Blob([content], { type: mime }));
   const anchor = document.createElement('a'); anchor.href = url; anchor.download = filename;
@@ -337,10 +269,7 @@ $('#export-button').addEventListener('click', () => {
   catch (error) { notice(error.message); }
 });
 function importError(message = '') { $('#import-error').textContent = message; $('#import-error').hidden = !message; }
-function showImport() {
-  $('#repository-input').value = settings.repository; $('#ref-input').value = settings.ref;
-  $('#import-dialog').showModal();
-}
+function showImport() { $('#import-dialog').showModal(); }
 $('#import-button').addEventListener('click', showImport);
 $('#empty-import').addEventListener('click', showImport);
 $('#help-button').addEventListener('click', () => $('#help-dialog').showModal());
@@ -352,20 +281,19 @@ function setImportTable(table) {
   if (table.rows.length > 25000) throw new Error('Please split this spreadsheet into files of 25,000 rows or fewer.');
   pendingImport = table;
   const normalized = value => value.trim().toLowerCase().replace(/[\s-]+/g, '_');
-  function options(selector, aliases, optional) {
+  function options(selector, aliases, placeholder = 'Generate from row') {
     const select = $(selector);
     select.replaceChildren();
-    if (optional) select.add(new Option('Generate from row', ''));
-    else select.add(new Option('Select screenshot column', ''));
+    select.add(new Option(placeholder, ''));
     table.headers.forEach(header => select.add(new Option(header, header)));
     const match = aliases.map(alias => table.headers.find(header => normalized(header) === alias)).find(Boolean);
     select.value = match || '';
   }
-  options('#asset-column', ['review_asset_path', 'asset_path', 'screenshot_path', 'github_path', 'filepath', 'file_path', 'screenshot', 'screenshot_url', 'asset_url', 'image_path', 'image_url', 'asset'], false);
-  options('#title-column', ['review_asset_title', 'title', 'name', 'facility_name', 'hospital_name', 'document_title'], true);
-  options('#id-column', ['review_asset_id', 'id', 'asset_id', 'record_id'], true);
+  options('#source-column', SOURCE_KEYS, 'Select original page column');
+  options('#title-column', ['review_asset_title', 'title', 'name', 'facility_name', 'hospital_name', 'document_title']);
+  options('#id-column', ['review_asset_id', 'id', 'asset_id', 'record_id']);
   $('#import-settings').hidden = false;
-  $('#import-summary').textContent = `${table.rows.length.toLocaleString()} assets · ${table.headers.length} columns · all other fields will appear as scraped claims.`;
+  $('#import-summary').textContent = `${table.rows.length.toLocaleString()} assets · ${table.headers.length} columns · remaining claim fields appear in the workspace.`;
   $('#confirm-import').disabled = false;
 }
 function selectSheet() {
@@ -412,11 +340,12 @@ $('#import-form').addEventListener('submit', event => {
   event.preventDefault();
   if (!pendingImport) return;
   try {
-    const repository = $('#repository-input').value.trim(), ref = $('#ref-input').value.trim();
-    if (!/^[\w.-]+\/[\w.-]+$/.test(repository)) throw new Error('Enter the GitHub repository as owner/repository.');
-    if (!ref) throw new Error('Enter a branch or commit.');
-    const imported = normalizeRows(pendingImport.rows, { assetColumn: $('#asset-column').value, titleColumn: $('#title-column').value, idColumn: $('#id-column').value });
-    openDataset(imported, { datasetName: loadedFileName, repository, ref });
+    const imported = normalizeRows(pendingImport.rows, {
+      sourceColumn: $('#source-column').value || undefined,
+      titleColumn: $('#title-column').value,
+      idColumn: $('#id-column').value,
+    });
+    openDataset(imported, { datasetName: loadedFileName });
     $('#import-dialog').close(); notify(`Loaded ${records.length} assets. Ready for a human check.`);
   } catch (error) { importError(error.message); }
 });
@@ -427,5 +356,9 @@ document.addEventListener('keydown', event => {
   if (event.key === 'ArrowRight') { event.preventDefault(); navigate(1); }
 });
 
-if (restore()) renderAll();
-else await loadSample();
+if (restore()) {
+  renderAll();
+  if (replaceLegacySample) await loadSample(records);
+} else {
+  await loadSample();
+}

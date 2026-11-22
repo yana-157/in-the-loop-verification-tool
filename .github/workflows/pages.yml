@@ -35,7 +35,6 @@ jobs:
           cp -R "$SITE_SOURCE/lib" "$SITE_OUTPUT/lib"
           cp "$SITE_SOURCE/vendor/xlsx.full.min.js" "$SITE_SOURCE/vendor/LICENSE.sheetjs.txt" "$SITE_OUTPUT/vendor/"
           cp "$SITE_SOURCE/samples/"*.csv "$SITE_OUTPUT/samples/"
-          cp -R "$SITE_SOURCE/samples/assets" "$SITE_OUTPUT/samples/assets"
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
       - name: Upload static application
