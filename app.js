@@ -121,16 +121,15 @@ function restore() {
 }
 function renderNavigation() {
   const navigation = $('#navigators');
+  const groups = { accepted: 'REVIEWED ASSETS' };
+  if (inAudit) groups.inconclusive = 'REVISIT LATER';
   navigation.innerHTML = Object.entries(STATUS).map(([status, meta]) => {
     const items = queueRecords(status), count = visibleRecords().filter(record => record.status === status).length;
     const paged = paginate(items, queues[status].page, queues[status].size);
     queues[status].page = paged.page;
     const open = expanded === status;
-    const group = { accepted: 'REVIEWED ASSETS', inconclusive: 'REVISIT LATER' }[status];
-    const exportButton = status === 'inconclusive'
-      ? `<button type="button" class="queue-export" data-export-inconclusive ${count ? '' : 'disabled'}>Export inconclusive rows</button>`
-      : '';
-    return `${group ? `<div class="queue-label">${group}</div>` : ''}<div class="queue"><button class="queue-toggle" data-queue="${status}" aria-expanded="${open}" aria-controls="queue-${status}"><span class="queue-symbol ${status}">${icon(meta.icon)}</span><span class="queue-name">${meta.label}</span><span class="queue-count">${count}</span>${icon('right', 'chevron')}</button><div class="queue-panel" id="queue-${status}" ${open ? '' : 'hidden'}>${exportButton}<div class="page-size"><span>Assets per page</span><div class="size-buttons" role="group" aria-label="${meta.label} assets per page">${[1, 10, 50].map(size => `<button data-size="${size}" data-status="${status}" aria-pressed="${queues[status].size === size}" aria-label="Show ${size} ${meta.label.toLowerCase()} assets per page">${size}</button>`).join('')}</div></div><div class="asset-list">${paged.items.length ? paged.items.map((record, offset) => `<button class="asset-item" data-record="${escapeHtml(record.id)}" aria-current="${selectedId === record.id}" title="${escapeHtml(record.title)}"><span class="asset-index">${String((paged.page - 1) * queues[status].size + offset + 1).padStart(2, '0')}</span><span class="asset-item-copy"><strong>${escapeHtml(record.title)}</strong><small>${escapeHtml(record.id)} · ${record.fields.length} fields</small></span></button>`).join('') : '<div class="list-empty">No matching assets</div>'}</div><div class="pagination"><button data-page-change="-1" data-status="${status}" aria-label="Previous ${meta.label.toLowerCase()} list page" ${paged.page <= 1 ? 'disabled' : ''}>${icon('left')}</button><span>Page <select data-page-select="${status}" aria-label="${meta.label} list page">${Array.from({ length: paged.totalPages }, (_, index) => `<option value="${index + 1}" ${index + 1 === paged.page ? 'selected' : ''}>${index + 1}</option>`).join('')}</select> of ${paged.totalPages}</span><button data-page-change="1" data-status="${status}" aria-label="Next ${meta.label.toLowerCase()} list page" ${paged.page >= paged.totalPages ? 'disabled' : ''}>${icon('right')}</button></div></div></div>`;
+    const group = groups[status];
+    return `${group ? `<div class="queue-label">${group}</div>` : ''}<div class="queue"><button class="queue-toggle" data-queue="${status}" aria-expanded="${open}" aria-controls="queue-${status}"><span class="queue-symbol ${status}">${icon(meta.icon)}</span><span class="queue-name">${meta.label}</span><span class="queue-count">${count}</span>${icon('right', 'chevron')}</button><div class="queue-panel" id="queue-${status}" ${open ? '' : 'hidden'}><div class="page-size"><span>Assets per page</span><div class="size-buttons" role="group" aria-label="${meta.label} assets per page">${[1, 10, 50].map(size => `<button data-size="${size}" data-status="${status}" aria-pressed="${queues[status].size === size}" aria-label="Show ${size} ${meta.label.toLowerCase()} assets per page">${size}</button>`).join('')}</div></div><div class="asset-list">${paged.items.length ? paged.items.map((record, offset) => `<button class="asset-item" data-record="${escapeHtml(record.id)}" aria-current="${selectedId === record.id}" title="${escapeHtml(record.title)}"><span class="asset-index">${String((paged.page - 1) * queues[status].size + offset + 1).padStart(2, '0')}</span><span class="asset-item-copy"><strong>${escapeHtml(record.title)}</strong><small>${escapeHtml(record.id)} · ${record.fields.length} fields</small></span></button>`).join('') : '<div class="list-empty">No matching assets</div>'}</div><div class="pagination"><button data-page-change="-1" data-status="${status}" aria-label="Previous ${meta.label.toLowerCase()} list page" ${paged.page <= 1 ? 'disabled' : ''}>${icon('left')}</button><span>Page <select data-page-select="${status}" aria-label="${meta.label} list page">${Array.from({ length: paged.totalPages }, (_, index) => `<option value="${index + 1}" ${index + 1 === paged.page ? 'selected' : ''}>${index + 1}</option>`).join('')}</select> of ${paged.totalPages}</span><button data-page-change="1" data-status="${status}" aria-label="Next ${meta.label.toLowerCase()} list page" ${paged.page >= paged.totalPages ? 'disabled' : ''}>${icon('right')}</button></div></div></div>`;
   }).join('');
 }
 function renderProgress() {
@@ -177,13 +176,15 @@ function renderAudit() {
   $('#audit-export').hidden = inAudit;
   $('#audit-plan').textContent = describePlan(auditRun.plan);
   const result = auditResult();
-  $('#audit-inconclusive-options').hidden = result.inconclusive === 0;
+  $('#audit-inconclusive-options').hidden = !inAudit || result.inconclusive === 0;
   $('#audit-count-inconclusive').textContent = auditRun.countInconclusiveAsWrong ? 'Undo counting as wrong' : 'Mark all as wrong';
   const labels = {
     pending: `${result.remaining} ${result.remaining === 1 ? 'row' : 'rows'} left to review.`,
     pass: `Threshold check passed. The sample supports accuracy above ${percent(auditRun.plan.floor)}.`,
     'not-demonstrated': `The sample did not demonstrate accuracy above ${percent(auditRun.plan.floor)}.`,
-    'needs-review': 'The confidence interval is on hold. Revisit the inconclusive rows or choose Mark all as wrong.',
+    'needs-review': inAudit
+      ? 'The confidence interval is on hold. Revisit the inconclusive rows or choose Mark all as wrong.'
+      : 'The confidence interval is on hold. Open the frozen sample to review the inconclusive rows.',
   };
   $('#audit-result').textContent = `${labels[result.status]} ${result.correct} correct · ${result.incorrect} incorrect · ${result.inconclusive} inconclusive.`;
   const interval = result.confidenceInterval;
@@ -241,8 +242,8 @@ function renderDecision() {
   $('#clear-rating').disabled = record.status === 'pending';
   const hints = {
     pending: 'Choose the result that best fits the evidence.',
-    inconclusive: 'Saved in Inconclusive. Revisit this row when you have more evidence.',
   };
+  if (inAudit) hints.inconclusive = 'Saved in Inconclusive. Revisit this row when you have more evidence.';
   $('#decision-hint').textContent = hints[record.status] || 'Decision saved. You can change it or move to another asset.';
   $('#previous-asset').disabled = !neighbor(-1);
   $('#next-asset').disabled = !neighbor(1);
@@ -357,7 +358,6 @@ $('#navigators').addEventListener('click', event => {
     selectedId = paged.items.some(record => record.id === selectedId) ? selectedId : paged.items[0]?.id || null;
     renderNavigation(); renderCurrent(); persist();
   } else if (button.dataset.record) selectAsset(button.dataset.record);
-  else if (Object.hasOwn(button.dataset, 'exportInconclusive')) exportInconclusiveRows(visibleRecords(), inAudit);
   else if (button.dataset.size) {
     const queue = queues[button.dataset.status]; queue.size = Number(button.dataset.size); queue.page = 1;
     renderNavigation(); persist();
@@ -393,12 +393,12 @@ function download(content, filename, mime) {
 function exportFilename() {
   return name.replace(/\.[^.]+$/, '').replace(/[^\w\s.-]/g, '_');
 }
-function exportInconclusiveRows(rows, sample) {
-  const unresolved = rows.filter(record => record.status === 'inconclusive');
+function exportInconclusiveRows() {
+  if (!inAudit) return;
+  const unresolved = auditRun.records.filter(record => record.status === 'inconclusive');
   if (!unresolved.length) return;
   try {
-    const scope = sample ? 'sample-inconclusive' : 'inconclusive';
-    download(toCsv(unresolved), `${exportFilename()}-${scope}.csv`, 'text/csv;charset=utf-8');
+    download(toCsv(unresolved), `${exportFilename()}-sample-inconclusive.csv`, 'text/csv;charset=utf-8');
     notify('Inconclusive rows downloaded.');
   } catch (error) { notice(error.message); }
 }
@@ -456,17 +456,15 @@ $('#audit-start').addEventListener('click', () => {
 });
 $('#audit-toggle').addEventListener('click', () => { if (auditRun) switchAuditView(!inAudit); });
 $('#audit-revisit').addEventListener('click', () => {
-  if (auditRun?.records.some(record => record.status === 'inconclusive')) switchAuditView(true, 'inconclusive');
+  if (inAudit && auditRun.records.some(record => record.status === 'inconclusive')) switchAuditView(true, 'inconclusive');
 });
 $('#audit-count-inconclusive').addEventListener('click', () => {
-  if (!auditRun?.records.some(record => record.status === 'inconclusive')) return;
+  if (!inAudit || !auditRun.records.some(record => record.status === 'inconclusive')) return;
   auditRun.countInconclusiveAsWrong = !auditRun.countInconclusiveAsWrong;
   persist();
   renderAudit();
 });
-$('#audit-export-inconclusive').addEventListener('click', () => {
-  if (auditRun) exportInconclusiveRows(auditRun.records, true);
-});
+$('#audit-export-inconclusive').addEventListener('click', exportInconclusiveRows);
 $('#audit-export').addEventListener('click', () => {
   if (!auditRun) return;
   try { exportAudit(); }

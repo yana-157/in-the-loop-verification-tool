@@ -42,8 +42,6 @@ Choose **Open original page** to open the source in a new tab. Compare the sourc
 
 Use the previous and next buttons or the left and right arrows to move between records. You can change or clear a review. **Advance after rating** is optional.
 
-Use the **Inconclusive** queue to set aside rows for a later visit. Open the source again when you have enough information and change the rating to correct or incorrect. **Export inconclusive rows** saves that queue as a CSV with source links, claims, and review notes. Reimport it to review those rows on their own, or reopen the original frozen audit to update its result.
-
 The browser saves review state locally. **Export reviews** downloads a CSV with the data, review decisions, notes, and timestamps. You can reimport it elsewhere. A review included in an import takes precedence over the local draft. Export a copy before clearing browser data.
 
 ## Verify a random sample
@@ -53,6 +51,8 @@ The browser saves review state locally. **Export reviews** downloads a CSV with 
 3. Follow each sampled row’s source link and check the claim in context. Mark it correct when the source supports what the row recorded, including its scope. Use Inconclusive to set aside a row when the page is unavailable or the wording is unclear.
 4. If any sampled rows are inconclusive, the audit holds the confidence interval and threshold result. Use **Revisit inconclusive rows** to check those rows again, or choose **Mark all as wrong** to count the inconclusive rows as wrong in the calculation. Those rows remain available for later review. Undoing the choice holds the results again while any inconclusive rows remain.
 5. Once you have reviewed every sampled row and resolved or explicitly counted the inconclusive rows as wrong, the audit shows the **95% confidence interval** and a verdict against the accuracy target. For a review of the entire sheet, it shows the accuracy directly.
+
+In the frozen sample, **Export inconclusive rows** saves a CSV with the deferred claims, source links, and review notes. Reimport it to review those rows on their own, or return to the frozen sample to update the original audit result.
 
 To try a smaller sample using the five example links, set the accuracy target to **50%** and leave the other settings at their defaults before calculating. The app will draw three rows.
 

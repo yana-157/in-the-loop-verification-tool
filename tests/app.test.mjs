@@ -199,6 +199,15 @@ test('the source-link demo waits for inconclusive rows or explicit permission to
   assert.equal(app.get('#audit-count-inconclusive').textContent, 'Mark all as wrong');
 
   app.get('#audit-toggle').dispatch('click');
+  assert.equal(app.get('#audit-inconclusive-options').hidden, true);
+  app.get('#audit-revisit').dispatch('click');
+  app.get('#audit-count-inconclusive').dispatch('click');
+  app.get('#audit-export-inconclusive').dispatch('click');
+  assert.equal(app.state().inAudit, false);
+  assert.equal(app.audit().countInconclusiveAsWrong, false);
+  assert.equal(app.downloads.length, 0);
+  app.get('#audit-toggle').dispatch('click');
+  assert.equal(app.get('#audit-inconclusive-options').hidden, false);
   app.get('#asset-search').value = 'a filter with no matches';
   app.get('#asset-search').dispatch('input');
   app.get('#audit-revisit').dispatch('click');
@@ -258,28 +267,20 @@ test('the source-link demo waits for inconclusive rows or explicit permission to
   assert.equal(restored.get('#reviewed-count').textContent, 0);
 });
 
-test('the Inconclusive queue exports only deferred rows with their claims and notes', async () => {
+test('ordinary reviews export all rows and keep audit controls in the frozen sample', async () => {
   const app = await harness(fixture(3));
   app.rate('inconclusive');
   app.get('#review-notes').value = 'Need a better source.';
   app.get('#review-notes').dispatch('input');
-  app.clickQueue({ record: 'asset-2' });
-  app.rate('inconclusive');
-  app.clickQueue({ record: 'asset-3' });
-  app.rate('rejected');
   app.clickQueue({ queue: 'inconclusive' });
-  assert.match(app.get('#navigators').innerHTML, /data-export-inconclusive >Export inconclusive rows/);
-  app.get('#asset-search').value = 'a filter with no matches';
-  app.get('#asset-search').dispatch('input');
-  app.clickQueue({ exportInconclusive: '' });
+  assert.doesNotMatch(app.get('#navigators').innerHTML, /REVISIT LATER|Export inconclusive rows/);
+  app.get('#export-button').dispatch('click');
   const [download] = app.downloads;
-  assert.match(download.name, /^Test spreadsheet-inconclusive\.csv$/);
+  assert.match(download.name, /^Test spreadsheet-reviewed\.csv$/);
   const exported = data.normalizeRows(data.parseDelimited(await download.blob.text()).rows);
-  assert.deepEqual(exported.map(row => row.id), ['asset-1', 'asset-2']);
-  assert.equal(exported[0].sourceUrl, 'https://example.com/source/1');
-  assert.equal(exported[0].original.claim, 'Claim 1');
+  assert.deepEqual(exported.map(row => row.id), ['asset-1', 'asset-2', 'asset-3']);
+  assert.deepEqual(exported.map(row => row.status), ['inconclusive', 'pending', 'pending']);
   assert.equal(exported[0].notes, 'Need a better source.');
-  assert.ok(exported.every(row => row.status === 'inconclusive'));
 });
 
 test('collapsing the navigator preserves previous and next asset navigation', async () => {

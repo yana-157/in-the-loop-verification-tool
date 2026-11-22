@@ -7,18 +7,6 @@ dd{font-size:16px}dt,.claim-explanation,.source-link,.review-note label,.review-
 @media(max-width:980px){.sidebar{width:225px}.app-shell{margin-left:225px}.topbar{height:auto;min-height:85px;padding:18px 20px;flex-wrap:wrap;gap:13px}.breadcrumb{font-size:12px}.top-actions{width:100%}.top-actions .button{flex:1}.page-heading h1{font-size:26px}.sample-badge{display:none}.progress-panel{gap:20px;padding:16px;flex-wrap:wrap}.progress-visual{width:100%;max-width:none}.progress-copy small{max-width:none}.comparison-grid{grid-template-columns:1fr}.claims-content{max-height:none}.asset-heading h2{font-size:18px}.asset-nav{gap:4px}.asset-nav>span{font-size:10px;white-space:nowrap}.review-bottom{flex-wrap:wrap}.toast{left:calc(50% + 112px)}}
 @media(max-width:650px){.sidebar{position:relative;width:100%;height:auto;padding:20px;max-height:none}.brand{padding:0;font-size:22px}.sidebar-heading,.dataset-name,.sidebar-bottom{display:none}.search-box{margin:22px 0 12px}.queue-label{padding-top:12px}.queue-toggle{padding:10px}.asset-list{max-height:220px}.app-shell{margin-left:0}.topbar{padding:16px 20px}.breadcrumb{display:none}.top-actions{gap:8px}.top-actions .button{font-size:12px;padding:10px}.page-heading{margin-bottom:20px}main{padding:26px 18px 0}.page-heading h1{font-size:27px}.page-heading p{font-size:13px}.progress-panel{margin-bottom:24px}.asset-heading{align-items:flex-start}.asset-kicker{flex-wrap:wrap;font-size:10px;gap:5px}.asset-heading h2{font-size:18px;line-height:1.5}.asset-nav{padding-top:4px}.asset-nav>span{display:none}.card-heading h3{font-size:13px}.rating-bar{gap:8px;margin-top:23px}.rating-circle{width:57px;height:57px}.rating strong{font-size:13px}.rating small{font-size:9px;text-align:center;display:block}.rating small kbd{display:none}.review-bottom>span{display:none}.review-bottom{font-size:11px}.toast{left:50%}.workspace-footer{font-size:9px}.mapping-grid{grid-template-columns:1fr}.dialog-footer{align-items:stretch;flex-direction:column-reverse}.dialog-footer>a{text-align:center;margin-top:8px}dialog{padding:23px}.dialog-header h2{font-size:21px}.progress-copy strong{font-size:14px}.empty-state{padding:50px 10px}}
 .search-box:focus-within{outline:3px solid #79ba9b;outline-offset:3px}
-.queue-export {
-  width: 100%;
-  padding: 7px 9px;
-  margin-bottom: 9px;
-  border: 1px solid #3d5557;
-  border-radius: 5px;
-  background: #203a3d;
-  color: #e4eeee;
-  font-size: 12px;
-  font-weight: 600;
-}
-.queue-export:hover:not(:disabled) { background: #304b4e; }
 .audit-panel {
   margin-bottom: 22px;
   padding: 14px 18px;
