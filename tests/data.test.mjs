@@ -170,6 +170,7 @@ test('legacy drafts remain identifiable and legacy asset columns are preserved w
   assert.ok(!records[0].fields.some(({ name }) => name === 'screenshot_path'));
   assert.equal(legacyDatasetKey(records), 'in-the-loop:v1:1:67242e06c18006a6');
   assert.equal(legacyDatasetKey(normalizeRows(rows)), '');
+  assert.equal(legacyDatasetKey(normalizeRows([{ ...old, other: 'https://example.org/b' }], { sourceColumn: 'other' })), '');
   const restored = normalizeRows(parseDelimited(toCsv(records)).rows);
   assert.equal(restored[0].original.screenshot_path, old.screenshot_path);
   assert.equal(legacyDatasetKey(restored), legacyDatasetKey(records));
