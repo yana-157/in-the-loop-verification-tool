@@ -45,26 +45,39 @@ test('planner picks the same smallest fixed sample and cutoff as exhaustive inte
   }
 });
 
-test('inconclusive source evidence stays in the frozen sample and bounds the p-value', () => {
+test('inconclusive source evidence defers results unless explicitly counted as wrong', () => {
   const plan = planAudit(161, { alpha: .05, floor: .90, designAccuracy: .98, power: .80 });
   const { sampleSize: n, criticalCorrect: k } = plan;
   assert.deepEqual([n, k], [39, 38]);
-  const evaluate = (correct, incorrect, inconclusive, remaining = 0) =>
-    evaluateAudit(plan, { correct, incorrect, inconclusive, remaining });
+  const evaluate = (correct, incorrect, inconclusive, remaining = 0, options) =>
+    evaluateAudit(plan, { correct, incorrect, inconclusive, remaining }, options);
+  const countAsWrong = { countInconclusiveAsWrong: true };
   const complete = evaluate(k, n - k, 0);
   assert.equal(complete.status, 'pass');
+  assert.equal(complete.countInconclusiveAsWrong, false);
   assert.deepEqual(complete.confidenceInterval, { level: .95, lower: 142 / 161, upper: 160 / 161 });
-  assert.equal(evaluate(k - 1, n - k + 1, 0).status, 'not-demonstrated');
-  const passWithUnknown = evaluate(k, n - k - 1, 1);
-  assert.equal(passWithUnknown.status, 'pass');
-  assert.deepEqual(passWithUnknown.confidenceInterval, { level: .95, lower: 142 / 161, upper: 1 });
-  const unresolved = evaluate(k - 1, n - k, 1);
-  assert.equal(unresolved.status, 'inconclusive');
-  assert.ok(unresolved.pValueMin <= plan.alpha && unresolved.pValueMax > plan.alpha);
-  assert.deepEqual(unresolved.confidenceInterval, { level: .95, lower: 136 / 161, upper: 160 / 161 });
-  assert.equal(evaluate(k - 2, n - k + 1, 1).status, 'not-demonstrated');
-  const pending = evaluate(k, n - k - 1, 0, 1);
+  const unresolved = evaluate(k, n - k - 1, 1);
+  assert.equal(unresolved.status, 'needs-review');
+  assert.equal(unresolved.countInconclusiveAsWrong, false);
+  assert.equal(unresolved.pValueMin, null);
+  assert.equal(unresolved.pValueMax, null);
+  assert.equal(unresolved.confidenceInterval, null);
+  const passWithAssumption = evaluate(k, n - k - 1, 1, 0, countAsWrong);
+  assert.equal(passWithAssumption.status, 'pass');
+  assert.equal(passWithAssumption.countInconclusiveAsWrong, true);
+  assert.equal(passWithAssumption.inconclusive, 1);
+  assert.equal(passWithAssumption.incorrect, 0);
+  assert.equal(passWithAssumption.pValueMin, complete.pValueMin);
+  assert.equal(passWithAssumption.pValueMax, complete.pValueMax);
+  assert.deepEqual(passWithAssumption.confidenceInterval, complete.confidenceInterval);
+  const verifiedFailure = evaluate(k - 1, n - k + 1, 0);
+  const failureWithAssumption = evaluate(k - 1, n - k, 1, 0, countAsWrong);
+  assert.equal(verifiedFailure.status, 'not-demonstrated');
+  assert.equal(failureWithAssumption.status, verifiedFailure.status);
+  assert.deepEqual(failureWithAssumption.confidenceInterval, verifiedFailure.confidenceInterval);
+  const pending = evaluate(k - 1, n - k - 1, 1, 1, countAsWrong);
   assert.equal(pending.status, 'pending');
+  assert.equal(pending.countInconclusiveAsWrong, false);
   assert.equal(pending.pValueMin, null);
   assert.equal(pending.confidenceInterval, null);
   assert.throws(() => evaluate(1, 0, 0), /every row/);
@@ -75,9 +88,13 @@ test('the built-in five-row audit reviews every row and has no sampling uncertai
   assert.deepEqual([plan.sampleSize, plan.criticalCorrect], [5, 5]);
   const verified = evaluateAudit(plan, { correct: 5, incorrect: 0, inconclusive: 0, remaining: 0 });
   assert.deepEqual(verified.confidenceInterval, { level: .95, lower: 1, upper: 1 });
-  const unresolved = evaluateAudit(plan, { correct: 4, incorrect: 0, inconclusive: 1, remaining: 0 });
-  assert.deepEqual(unresolved.confidenceInterval, { level: .95, lower: .8, upper: 1 });
-  assert.equal(unresolved.status, 'inconclusive');
+  const counts = { correct: 4, incorrect: 0, inconclusive: 1, remaining: 0 };
+  const unresolved = evaluateAudit(plan, counts);
+  assert.equal(unresolved.confidenceInterval, null);
+  assert.equal(unresolved.status, 'needs-review');
+  const counted = evaluateAudit(plan, counts, { countInconclusiveAsWrong: true });
+  assert.deepEqual(counted.confidenceInterval, { level: .95, lower: .8, upper: .8 });
+  assert.equal(counted.status, 'not-demonstrated');
 });
 
 test('confidence intervals invert both exact tails, including at discrete confidence cutoffs', () => {
@@ -121,8 +138,10 @@ test('invalid test settings are rejected and close rates can require nearly a ce
   assert.throws(() => planAudit(10, { alpha: 0, floor: .90, designAccuracy: .98, power: .80 }), /alpha/);
   const plan = planAudit(25_000, { alpha: .01, floor: .90, designAccuracy: .90004, power: .90 });
   assert.ok(plan.sampleSize > 24_900 && plan.sampleSize <= 25_000);
-  assert.deepEqual(estimateAccuracyInterval(25_000, { correct: 0, incorrect: 0, inconclusive: 25_000 }), {
-    level: .95, lower: 0, upper: 1,
+  const unresolved = { correct: 0, incorrect: 0, inconclusive: 25_000 };
+  assert.equal(estimateAccuracyInterval(25_000, unresolved), null);
+  assert.deepEqual(estimateAccuracyInterval(25_000, unresolved, .95, { countInconclusiveAsWrong: true }), {
+    level: .95, lower: 0, upper: 0,
   });
   assert.throws(() => estimateAccuracyInterval(5, { correct: 6, incorrect: 0, inconclusive: 0 }), /review counts/);
 });

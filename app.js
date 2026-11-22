@@ -63,6 +63,7 @@ function persist() {
   try {
     if (auditRun) localStorage.setItem(auditKey(), JSON.stringify({
       plan: auditRun.plan, startedAt: auditRun.startedAt, reviews: auditRun.records.map(reviewDecision),
+      countInconclusiveAsWrong: auditRun.countInconclusiveAsWrong,
     }));
     localStorage.setItem(STORAGE, JSON.stringify({ records, name, isSample, key, selectedId, expanded, queues, autoAdvance: $('#auto-advance').checked, inAudit, allRowsView }));
     if (key) localStorage.setItem(key, JSON.stringify(records.map(reviewDecision)));
@@ -89,7 +90,9 @@ function restoreAudit() {
     if (!saved || saved.plan?.population !== records.length || !Array.isArray(saved.reviews)) return;
     const plan = planAudit(records.length, saved.plan);
     if (saved.reviews.length !== plan.sampleSize || new Set(saved.reviews.map(review => review.id)).size !== plan.sampleSize) return;
-    auditRun = { plan, startedAt: saved.startedAt, records: sampleRecords(saved.reviews) };
+    const sample = sampleRecords(saved.reviews);
+    const countInconclusiveAsWrong = saved.countInconclusiveAsWrong === true && sample.some(record => record.status === 'inconclusive');
+    auditRun = { plan, startedAt: saved.startedAt, records: sample, countInconclusiveAsWrong };
   } catch { /* A damaged audit draft must not prevent the ordinary workspace opening. */ }
 }
 function restore() {
@@ -118,12 +121,16 @@ function restore() {
 }
 function renderNavigation() {
   const navigation = $('#navigators');
-  navigation.innerHTML = Object.entries(STATUS).map(([status, meta], index) => {
+  navigation.innerHTML = Object.entries(STATUS).map(([status, meta]) => {
     const items = queueRecords(status), count = visibleRecords().filter(record => record.status === status).length;
     const paged = paginate(items, queues[status].page, queues[status].size);
     queues[status].page = paged.page;
     const open = expanded === status;
-    return `${index === 1 ? '<div class="queue-label">REVIEWED ASSETS</div>' : ''}<div class="queue"><button class="queue-toggle" data-queue="${status}" aria-expanded="${open}" aria-controls="queue-${status}"><span class="queue-symbol ${status}">${icon(meta.icon)}</span><span class="queue-name">${meta.label}</span><span class="queue-count">${count}</span>${icon('right', 'chevron')}</button><div class="queue-panel" id="queue-${status}" ${open ? '' : 'hidden'}><div class="page-size"><span>Assets per page</span><div class="size-buttons" role="group" aria-label="${meta.label} assets per page">${[1, 10, 50].map(size => `<button data-size="${size}" data-status="${status}" aria-pressed="${queues[status].size === size}" aria-label="Show ${size} ${meta.label.toLowerCase()} assets per page">${size}</button>`).join('')}</div></div><div class="asset-list">${paged.items.length ? paged.items.map((record, offset) => `<button class="asset-item" data-record="${escapeHtml(record.id)}" aria-current="${selectedId === record.id}" title="${escapeHtml(record.title)}"><span class="asset-index">${String((paged.page - 1) * queues[status].size + offset + 1).padStart(2, '0')}</span><span class="asset-item-copy"><strong>${escapeHtml(record.title)}</strong><small>${escapeHtml(record.id)} · ${record.fields.length} fields</small></span></button>`).join('') : '<div class="list-empty">No matching assets</div>'}</div><div class="pagination"><button data-page-change="-1" data-status="${status}" aria-label="Previous ${meta.label.toLowerCase()} list page" ${paged.page <= 1 ? 'disabled' : ''}>${icon('left')}</button><span>Page <select data-page-select="${status}" aria-label="${meta.label} list page">${Array.from({ length: paged.totalPages }, (_, index) => `<option value="${index + 1}" ${paged.page === index + 1 ? 'selected' : ''}>${index + 1}</option>`).join('')}</select> of ${paged.totalPages}</span><button data-page-change="1" data-status="${status}" aria-label="Next ${meta.label.toLowerCase()} list page" ${paged.page >= paged.totalPages ? 'disabled' : ''}>${icon('right')}</button></div></div></div>`;
+    const group = { accepted: 'REVIEWED ASSETS', inconclusive: 'REVISIT LATER' }[status];
+    const exportButton = status === 'inconclusive'
+      ? `<button type="button" class="queue-export" data-export-inconclusive ${count ? '' : 'disabled'}>Export inconclusive rows</button>`
+      : '';
+    return `${group ? `<div class="queue-label">${group}</div>` : ''}<div class="queue"><button class="queue-toggle" data-queue="${status}" aria-expanded="${open}" aria-controls="queue-${status}"><span class="queue-symbol ${status}">${icon(meta.icon)}</span><span class="queue-name">${meta.label}</span><span class="queue-count">${count}</span>${icon('right', 'chevron')}</button><div class="queue-panel" id="queue-${status}" ${open ? '' : 'hidden'}>${exportButton}<div class="page-size"><span>Assets per page</span><div class="size-buttons" role="group" aria-label="${meta.label} assets per page">${[1, 10, 50].map(size => `<button data-size="${size}" data-status="${status}" aria-pressed="${queues[status].size === size}" aria-label="Show ${size} ${meta.label.toLowerCase()} assets per page">${size}</button>`).join('')}</div></div><div class="asset-list">${paged.items.length ? paged.items.map((record, offset) => `<button class="asset-item" data-record="${escapeHtml(record.id)}" aria-current="${selectedId === record.id}" title="${escapeHtml(record.title)}"><span class="asset-index">${String((paged.page - 1) * queues[status].size + offset + 1).padStart(2, '0')}</span><span class="asset-item-copy"><strong>${escapeHtml(record.title)}</strong><small>${escapeHtml(record.id)} · ${record.fields.length} fields</small></span></button>`).join('') : '<div class="list-empty">No matching assets</div>'}</div><div class="pagination"><button data-page-change="-1" data-status="${status}" aria-label="Previous ${meta.label.toLowerCase()} list page" ${paged.page <= 1 ? 'disabled' : ''}>${icon('left')}</button><span>Page <select data-page-select="${status}" aria-label="${meta.label} list page">${Array.from({ length: paged.totalPages }, (_, index) => `<option value="${index + 1}" ${index + 1 === paged.page ? 'selected' : ''}>${index + 1}</option>`).join('')}</select> of ${paged.totalPages}</span><button data-page-change="1" data-status="${status}" aria-label="Next ${meta.label.toLowerCase()} list page" ${paged.page >= paged.totalPages ? 'disabled' : ''}>${icon('right')}</button></div></div></div>`;
   }).join('');
 }
 function renderProgress() {
@@ -152,7 +159,7 @@ function auditResult() {
   const counts = { correct: 0, incorrect: 0, inconclusive: 0, remaining: 0 };
   const outcomes = { accepted: 'correct', rejected: 'incorrect', inconclusive: 'inconclusive', pending: 'remaining' };
   for (const record of auditRun.records) counts[outcomes[record.status]]++;
-  return evaluateAudit(auditRun.plan, counts);
+  return evaluateAudit(auditRun.plan, counts, { countInconclusiveAsWrong: auditRun.countInconclusiveAsWrong });
 }
 function describePlan(plan) {
   const size = plan.sampleSize === plan.population
@@ -170,24 +177,24 @@ function renderAudit() {
   $('#audit-export').hidden = inAudit;
   $('#audit-plan').textContent = describePlan(auditRun.plan);
   const result = auditResult();
+  $('#audit-inconclusive-options').hidden = result.inconclusive === 0;
+  $('#audit-count-inconclusive').textContent = auditRun.countInconclusiveAsWrong ? 'Undo counting as wrong' : 'Mark all as wrong';
   const labels = {
     pending: `${result.remaining} ${result.remaining === 1 ? 'row' : 'rows'} left to review.`,
     pass: `Threshold check passed. The sample supports accuracy above ${percent(auditRun.plan.floor)}.`,
     'not-demonstrated': `The sample did not demonstrate accuracy above ${percent(auditRun.plan.floor)}.`,
-    inconclusive: 'The threshold check is inconclusive because some rows could not be verified.',
+    'needs-review': 'The confidence interval is on hold. Revisit the inconclusive rows or choose Mark all as wrong.',
   };
   $('#audit-result').textContent = `${labels[result.status]} ${result.correct} correct · ${result.incorrect} incorrect · ${result.inconclusive} inconclusive.`;
   const interval = result.confidenceInterval;
   $('#audit-interval').hidden = !interval;
-  if (!interval) return;
+  if (!interval) { $('#audit-interval').textContent = ''; return; }
   const allRowsChecked = auditRun.plan.sampleSize === auditRun.plan.population;
-  const qualification = result.inconclusive ? ' The range allows for either outcome on unclear rows.' : '';
-  const range = `${percent(interval.lower)} to ${percent(interval.upper)}`;
+  const qualification = result.countInconclusiveAsWrong ? ' Inconclusive rows count as wrong in these results.' : '';
   if (allRowsChecked) {
-    const accuracy = result.inconclusive ? `Possible copying accuracy: ${range}.` : `Exact copying accuracy: ${percent(interval.lower)}.`;
-    $('#audit-interval').textContent = `${accuracy} All rows were checked.${qualification}`;
+    $('#audit-interval').textContent = `Copying accuracy: ${percent(interval.lower)}. All rows were reviewed.${qualification}`;
   } else {
-    $('#audit-interval').textContent = `${percent(interval.level)} confidence interval for this sheet’s copying accuracy: ${range}.${qualification}`;
+    $('#audit-interval').textContent = `${percent(interval.level)} confidence interval for this sheet’s copying accuracy: ${percent(interval.lower)} to ${percent(interval.upper)}.${qualification}`;
   }
 }
 function clearAuditPreview() {
@@ -200,13 +207,14 @@ function reportAuditError(error) {
   $('#audit-error').textContent = error.message;
   $('#audit-error').hidden = false;
 }
-function switchAuditView(enabled) {
+function switchAuditView(enabled, preferredStatus = 'pending') {
   const previous = allRowsView;
-  allRowsView = enabled ? { selectedId, expanded } : null;
+  if (enabled && !inAudit) allRowsView = { selectedId, expanded };
+  if (!enabled) allRowsView = null;
   inAudit = enabled;
   const visible = visibleRecords();
   const selected = (!enabled && visible.find(record => record.id === previous?.selectedId))
-    || visible.find(record => record.status === 'pending') || visible[0];
+    || visible.find(record => record.status === preferredStatus) || visible[0];
   const previousQueue = previous?.expanded;
   expanded = !enabled && (previousQueue === null || Object.hasOwn(STATUS, previousQueue)) ? previousQueue : selected.status;
   query = '';
@@ -231,7 +239,11 @@ function renderDecision() {
   $('#current-status').className = `status-pill ${record.status}`;
   document.querySelectorAll('[data-rate]').forEach(button => button.setAttribute('aria-pressed', button.dataset.rate === record.status));
   $('#clear-rating').disabled = record.status === 'pending';
-  $('#decision-hint').textContent = record.status === 'pending' ? 'Choose the result that best fits the evidence.' : 'Decision saved. You can change it or move to another asset.';
+  const hints = {
+    pending: 'Choose the result that best fits the evidence.',
+    inconclusive: 'Saved in Inconclusive. Revisit this row when you have more evidence.',
+  };
+  $('#decision-hint').textContent = hints[record.status] || 'Decision saved. You can change it or move to another asset.';
   $('#previous-asset').disabled = !neighbor(-1);
   $('#next-asset').disabled = !neighbor(1);
 }
@@ -281,8 +293,13 @@ function rate(status) {
   const record = current();
   if (!record || !STATUS[status]) return;
   const next = neighbor(1) || neighbor(-1);
+  const addedInconclusive = status === 'inconclusive' && record.status !== 'inconclusive';
   record.status = status;
   record.reviewedAt = status === 'pending' ? '' : new Date().toISOString();
+  if (inAudit && auditRun.countInconclusiveAsWrong
+      && (addedInconclusive || !auditRun.records.some(row => row.status === 'inconclusive'))) {
+    auditRun.countInconclusiveAsWrong = false;
+  }
   persist(); renderProgress(); renderNavigation(); renderDecision();
   notify(status === 'pending' ? 'Decision cleared. Asset is back in To verify.' : `${STATUS[status].pill} · ${saveFailed ? 'export to save your review' : 'review saved'}`);
   if ($('#auto-advance').checked && next && status !== 'pending') selectAsset(next.id, { alignPage: true });
@@ -340,6 +357,7 @@ $('#navigators').addEventListener('click', event => {
     selectedId = paged.items.some(record => record.id === selectedId) ? selectedId : paged.items[0]?.id || null;
     renderNavigation(); renderCurrent(); persist();
   } else if (button.dataset.record) selectAsset(button.dataset.record);
+  else if (Object.hasOwn(button.dataset, 'exportInconclusive')) exportInconclusiveRows(visibleRecords(), inAudit);
   else if (button.dataset.size) {
     const queue = queues[button.dataset.status]; queue.size = Number(button.dataset.size); queue.page = 1;
     renderNavigation(); persist();
@@ -372,22 +390,34 @@ function download(content, filename, mime) {
   document.body.append(anchor); anchor.click(); anchor.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
+function exportFilename() {
+  return name.replace(/\.[^.]+$/, '').replace(/[^\w\s.-]/g, '_');
+}
+function exportInconclusiveRows(rows, sample) {
+  const unresolved = rows.filter(record => record.status === 'inconclusive');
+  if (!unresolved.length) return;
+  try {
+    const scope = sample ? 'sample-inconclusive' : 'inconclusive';
+    download(toCsv(unresolved), `${exportFilename()}-${scope}.csv`, 'text/csv;charset=utf-8');
+    notify('Inconclusive rows downloaded.');
+  } catch (error) { notice(error.message); }
+}
 function exportAudit() {
   const receipt = {
     dataset: name, datasetKey: key, startedAt: auditRun.startedAt, exportedAt: new Date().toISOString(),
     method: { threshold: 'one-sided exact hypergeometric', interval: 'two-sided exact hypergeometric' },
+    assumptions: { countInconclusiveAsWrong: auditRun.countInconclusiveAsWrong },
     plan: auditRun.plan, result: auditResult(), sample: auditRun.records.map((record, index) => ({
       drawOrder: index + 1, rowNumber: record.rowNumber, sourceUrl: record.sourceUrl, ...reviewDecision(record),
     })),
   };
-  const filename = name.replace(/\.[^.]+$/, '').replace(/[^\w\s.-]/g, '_');
-  download(JSON.stringify(receipt, null, 2) + '\n', `${filename}-accuracy-audit.json`, 'application/json');
+  download(JSON.stringify(receipt, null, 2) + '\n', `${exportFilename()}-accuracy-audit.json`, 'application/json');
   notify('Audit receipt downloaded.');
 }
 $('#export-button').addEventListener('click', () => {
   try {
     if (inAudit) { exportAudit(); return; }
-    download(toCsv(records), `${name.replace(/\.[^.]+$/, '').replace(/[^\w\s.-]/g, '_')}-reviewed.csv`, 'text/csv;charset=utf-8');
+    download(toCsv(records), `${exportFilename()}-reviewed.csv`, 'text/csv;charset=utf-8');
     notify('Review export downloaded.');
   }
   catch (error) { notice(error.message); }
@@ -415,13 +445,28 @@ $('#audit-start').addEventListener('click', () => {
   if (!auditPreview || auditRun) return;
   try {
     const ids = drawAuditSample(records.map(record => record.id), auditPreview.sampleSize);
-    auditRun = { plan: auditPreview, startedAt: new Date().toISOString(), records: sampleRecords(ids.map(id => ({ id }))) };
+    auditRun = {
+      plan: auditPreview, startedAt: new Date().toISOString(), records: sampleRecords(ids.map(id => ({ id }))),
+      countInconclusiveAsWrong: false,
+    };
   } catch (error) { reportAuditError(error); return; }
   clearAuditPreview();
   switchAuditView(true);
   $('#audit-toggle').focus();
 });
 $('#audit-toggle').addEventListener('click', () => { if (auditRun) switchAuditView(!inAudit); });
+$('#audit-revisit').addEventListener('click', () => {
+  if (auditRun?.records.some(record => record.status === 'inconclusive')) switchAuditView(true, 'inconclusive');
+});
+$('#audit-count-inconclusive').addEventListener('click', () => {
+  if (!auditRun?.records.some(record => record.status === 'inconclusive')) return;
+  auditRun.countInconclusiveAsWrong = !auditRun.countInconclusiveAsWrong;
+  persist();
+  renderAudit();
+});
+$('#audit-export-inconclusive').addEventListener('click', () => {
+  if (auditRun) exportInconclusiveRows(auditRun.records, true);
+});
 $('#audit-export').addEventListener('click', () => {
   if (!auditRun) return;
   try { exportAudit(); }

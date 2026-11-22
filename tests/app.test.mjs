@@ -170,7 +170,7 @@ test('a frozen random sample keeps its links and reviews through reloads separat
   assert.equal(restored.get('#export-label').textContent, 'Export audit receipt');
 });
 
-test('the source-link demo reports a confidence interval and exports its reviewed sample', async () => {
+test('the source-link demo waits for inconclusive rows or explicit permission to count them as wrong', async () => {
   const app = await harness(undefined, new Map());
   assert.equal(app.get('#audit-demo').hidden, false);
   app.get('#audit-form').dispatch('submit');
@@ -188,17 +188,98 @@ test('the source-link demo reports a confidence interval and exports its reviewe
   }
   assert.match(app.get('#audit-result').textContent, /passed.*50%/);
   assert.match(app.get('#audit-interval').textContent, /95% confidence interval.*60% to 100%/);
+  const inconclusiveId = app.get('#asset-id').textContent;
   app.rate('inconclusive');
-  assert.match(app.get('#audit-result').textContent, /threshold check is inconclusive/);
-  assert.match(app.get('#audit-interval').textContent, /40% to 100%.*unclear rows/);
+  app.get('#review-notes').value = 'Check the publication again later.';
+  app.get('#review-notes').dispatch('input');
+  assert.match(app.get('#decision-hint').textContent, /Revisit this row/);
+  assert.match(app.get('#audit-result').textContent, /confidence interval is on hold/);
+  assert.equal(app.get('#audit-interval').hidden, true);
+  assert.equal(app.get('#audit-interval').textContent, '');
+  assert.equal(app.get('#audit-count-inconclusive').textContent, 'Mark all as wrong');
+
+  app.get('#audit-toggle').dispatch('click');
+  app.get('#asset-search').value = 'a filter with no matches';
+  app.get('#asset-search').dispatch('input');
+  app.get('#audit-revisit').dispatch('click');
+  assert.equal(app.state().inAudit, true);
+  assert.equal(app.state().expanded, 'inconclusive');
+  assert.equal(app.get('#asset-search').value, '');
+  assert.equal(app.get('#asset-id').textContent, inconclusiveId);
+  assert.match(app.get('#navigators').innerHTML, /REVISIT LATER/);
+  const revisitedSourceUrl = app.get('#source-link').attributes.href;
+
+  app.get('#audit-count-inconclusive').dispatch('click');
+  assert.match(app.get('#audit-result').textContent, /did not demonstrate.*50%/);
+  assert.match(app.get('#audit-interval').textContent, /40% to 80%.*count as wrong/);
+  assert.equal(app.get('#audit-interval').hidden, false);
+  assert.equal(app.get('#current-status').textContent, 'Inconclusive');
+  assert.equal(app.audit().reviews.find(row => row.id === inconclusiveId).status, 'inconclusive');
   app.get('#export-button').dispatch('click');
-  const [download] = app.downloads;
-  assert.match(download.name, /-accuracy-audit\.json$/);
-  const receipt = JSON.parse(await download.blob.text());
-  assert.equal(receipt.result.status, 'inconclusive');
+  app.get('#audit-export-inconclusive').dispatch('click');
+  const [auditDownload, rowsDownload] = app.downloads;
+  assert.match(auditDownload.name, /-accuracy-audit\.json$/);
+  const receipt = JSON.parse(await auditDownload.blob.text());
+  assert.equal(receipt.assumptions.countInconclusiveAsWrong, true);
+  assert.equal(receipt.result.status, 'not-demonstrated');
+  assert.equal(receipt.result.countInconclusiveAsWrong, true);
   assert.equal(receipt.result.confidenceInterval.lower, 0.4);
   assert.equal(receipt.sample.length, 3);
   assert.ok(receipt.sample.every(row => row.sourceUrl.startsWith('https://')));
+
+  assert.match(rowsDownload.name, /-sample-inconclusive\.csv$/);
+  const exported = data.normalizeRows(data.parseDelimited(await rowsDownload.blob.text()).rows);
+  assert.equal(exported.length, 1);
+  assert.equal(exported[0].id, inconclusiveId);
+  assert.equal(exported[0].sourceUrl, revisitedSourceUrl);
+  assert.equal(exported[0].notes, 'Check the publication again later.');
+  assert.equal(exported[0].status, 'inconclusive');
+
+  const restored = await harness(undefined, app.storage);
+  assert.equal(restored.get('#audit-count-inconclusive').textContent, 'Undo counting as wrong');
+  assert.match(restored.get('#audit-interval').textContent, /40% to 80%/);
+  restored.get('#audit-count-inconclusive').dispatch('click');
+  assert.equal(restored.get('#audit-interval').hidden, true);
+  restored.get('#audit-count-inconclusive').dispatch('click');
+  const otherId = restored.audit().reviews.find(row => row.id !== inconclusiveId).id;
+  restored.clickQueue({ record: otherId });
+  restored.rate('inconclusive');
+  assert.equal(restored.audit().countInconclusiveAsWrong, false);
+  assert.equal(restored.get('#audit-interval').hidden, true);
+
+  restored.get('#audit-count-inconclusive').dispatch('click');
+  restored.rate('accepted');
+  restored.clickQueue({ record: inconclusiveId });
+  restored.rate('accepted');
+  assert.equal(restored.audit().countInconclusiveAsWrong, false);
+  assert.equal(restored.get('#audit-inconclusive-options').hidden, true);
+  assert.match(restored.get('#audit-interval').textContent, /60% to 100%/);
+  restored.get('#audit-toggle').dispatch('click');
+  assert.equal(restored.get('#reviewed-count').textContent, 0);
+});
+
+test('the Inconclusive queue exports only deferred rows with their claims and notes', async () => {
+  const app = await harness(fixture(3));
+  app.rate('inconclusive');
+  app.get('#review-notes').value = 'Need a better source.';
+  app.get('#review-notes').dispatch('input');
+  app.clickQueue({ record: 'asset-2' });
+  app.rate('inconclusive');
+  app.clickQueue({ record: 'asset-3' });
+  app.rate('rejected');
+  app.clickQueue({ queue: 'inconclusive' });
+  assert.match(app.get('#navigators').innerHTML, /data-export-inconclusive >Export inconclusive rows/);
+  app.get('#asset-search').value = 'a filter with no matches';
+  app.get('#asset-search').dispatch('input');
+  app.clickQueue({ exportInconclusive: '' });
+  const [download] = app.downloads;
+  assert.match(download.name, /^Test spreadsheet-inconclusive\.csv$/);
+  const exported = data.normalizeRows(data.parseDelimited(await download.blob.text()).rows);
+  assert.deepEqual(exported.map(row => row.id), ['asset-1', 'asset-2']);
+  assert.equal(exported[0].sourceUrl, 'https://example.com/source/1');
+  assert.equal(exported[0].original.claim, 'Claim 1');
+  assert.equal(exported[0].notes, 'Need a better source.');
+  assert.ok(exported.every(row => row.status === 'inconclusive'));
 });
 
 test('collapsing the navigator preserves previous and next asset navigation', async () => {
